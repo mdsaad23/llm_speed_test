@@ -24,8 +24,16 @@ const ollama = (tag: string, route = tag, note?: string): ModelEntry => ({
 });
 
 const OLLAMA: ModelEntry[] = [
-  ollama('llama3.2:3b-instruct-q4_K_M'),
-  ollama('llama3.2:3b-instruct-q8_0'),
+  {
+    ...ollama('llama3.2:3b-instruct-q4_K_M'),
+    enabled: false,
+    note: "confirmed on the current prompt/schema (fresh 3-seed run + a live probe): answers the fixed literal {\"move\":\"RIGHT\"} on every call of every game, food position ignored (0/30 calls varied). Below this model's capability floor for the task, not a prompt bug.",
+  },
+  {
+    ...ollama('llama3.2:3b-instruct-q8_0'),
+    enabled: false,
+    note: 'same fixed-output failure as the q4_K_M tag above.',
+  },
   ollama('granite4:7b-a1b-h'),
   ollama('qwen2.5-coder:7b-instruct-q4_K_M'),
   ollama('mistral:7b-instruct-v0.3-q4_K_M'),
@@ -41,7 +49,11 @@ const OLLAMA: ModelEntry[] = [
   ollama('phi4:14b-q4_K_M'),
   ollama('qwen3:14b-q4_K_M', undefined, 'hybrid reasoner: asked to think=false'),
   ollama('gemma4:26b-a4b-it-q4_K_M'),
-  ollama('minicpm-v:latest', undefined, 'vision model, played on text only'),
+  {
+    ...ollama('minicpm-v:latest'),
+    enabled: false,
+    note: 'vision model, played on text only: same fixed-output failure as llama3.2:3b, always answers RIGHT regardless of state. Not built for this task.',
+  },
   ollama('mistral-small-24b', 'hf.co/bartowski/Mistral-Small-24B-Instruct-2501-GGUF:IQ4_XS'),
   {
     ...ollama('nomic-embed-text:latest'),
