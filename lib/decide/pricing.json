@@ -1,0 +1,14 @@
+{
+  "google/gemini-3.8-flash": {
+    "input_per_1m_usd": 0.75,
+    "output_per_1m_usd": 3.75,
+    "source_url": "https://vercel.com/ai-gateway/models/gemini-3.8-flash",
+    "verified_at": "2026-09-20"
+  },
+  "typesafe-ai/jev": {
+    "input_per_1m_usd": 0.042,
+    "output_per_1m_usd": 0,
+    "source_url": "https://vercel.com/ai-gateway/models/jev",
+    "verified_at": "2026-09-20"
+  }
+}

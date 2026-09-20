@@ -1,0 +1,6 @@
+strictDepBuilds: false
+onlyBuiltDependencies:
+  - esbuild
+  - "@tailwindcss/oxide"
+allowBuilds:
+  esbuild: set this to true or false
