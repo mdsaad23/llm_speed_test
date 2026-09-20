@@ -1,4 +1,5 @@
 import { greedyAdapter, mockAdapter, randomAdapter, type Adapter, type MockOptions } from '@/lib/decide/adapters';
+import { gatewayAdapter, jevAdapter, ollamaAdapter } from '@/lib/decide/providers';
 
 export interface ModelEntry {
   /** What you type on the CLI. */
@@ -36,6 +37,20 @@ export const MODELS: ModelEntry[] = [
     mock: { latencyMs: 600, jitterMs: 2500, errorRate: 0.02, invalidRate: 0.03 },
     note: 'slow and jittery: drives the UI through timeouts, invalid replies and errors for free',
   },
+  {
+    id: 'gemini-3.8-flash', route: 'google/gemini-3.8-flash', provider: 'gateway',
+    reasoning: 'low', timeoutMs: 30_000, maxTokens: 16, enabled: false, paid: true,
+    note: 'the Gateway catalog offers effort low|medium|high for this model: "low" is its floor, not "off"',
+  },
+  {
+    id: 'jev', route: 'typesafe-ai/jev', provider: 'jev',
+    reasoning: 'none', timeoutMs: 30_000, maxTokens: 16, enabled: false, paid: true,
+  },
+  {
+    id: 'ollama:qwen3:4b', route: 'qwen3:4b', provider: 'ollama',
+    reasoning: 'none', timeoutMs: 120_000, maxTokens: 16, enabled: false, paid: false,
+    note: 'example: enable once the tag is pulled (ollama pull qwen3:4b)',
+  },
 ];
 
 export const findModel = (id: string): ModelEntry => {
@@ -51,7 +66,11 @@ export function createAdapter(entry: ModelEntry, seed: number): Adapter {
       return entry.route === 'baseline:random' ? randomAdapter(seed) : greedyAdapter();
     case 'mock':
       return mockAdapter(entry.id, { seed, ...entry.mock });
-    default:
-      throw new Error(`provider "${entry.provider}" is not wired up`);
+    case 'gateway':
+      return gatewayAdapter(entry);
+    case 'jev':
+      return jevAdapter(entry);
+    case 'ollama':
+      return ollamaAdapter(entry);
   }
 }
