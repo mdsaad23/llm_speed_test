@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { RESULTS_DIR } from '@/lib/metrics/results';
+import type { Replay } from '@/lib/runner/run';
 
 export const runtime = 'nodejs';
 
@@ -19,10 +20,20 @@ export async function GET(req: Request) {
     return new Response(readFileSync(file, 'utf8'), { headers: { 'content-type': 'application/json' } });
   }
 
-  const list = readdirSync(dir())
+  // Stat every file (cheap) to find the newest 100, then parse only those (the part that costs).
+  const newest = readdirSync(dir())
     .filter((f) => f.endsWith('.json'))
-    .map((f) => ({ id: f.replace(/\.json$/, ''), at: statSync(join(dir(), f)).mtimeMs }))
+    .map((f) => ({ f, at: statSync(join(dir(), f)).mtimeMs }))
     .sort((a, b) => b.at - a.at)
     .slice(0, 100);
+  const list = newest.map(({ f, at }) => {
+    const bareId = f.replace(/\.json$/, '');
+    try {
+      const { meta } = JSON.parse(readFileSync(join(dir(), f), 'utf8')) as Replay;
+      return { id: bareId, at, model: meta.model, mode: meta.mode, timestamp: meta.timestamp };
+    } catch {
+      return { id: bareId, at, model: bareId, mode: '', timestamp: '' };
+    }
+  });
   return Response.json(list);
 }

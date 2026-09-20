@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Board, { PALETTE, useTick } from './board';
-import { ARROW, Chart, Feed, Leaderboard, Rail, STATUS } from './panels';
+import { ARROW, Chart, Feed, fmt, Leaderboard, Rail, STATUS } from './panels';
 import { deadlineAt, defaultConfig, type Config, type State } from '@/lib/game/engine';
 import type { DecisionRecord, RunRecord } from '@/lib/metrics/metrics';
 import type { Replay } from '@/lib/runner/run';
@@ -575,9 +575,149 @@ function PromptPanel({ form }: { form: Form }) {
   );
 }
 
+const MAX_COMPARE = 8;
+
+/** Cumulative real time to reach each frame, from that frame's own measured latency — the axis parallel playback moves on, so a fast model visibly gets ahead of a slow one instead of both just ticking in lockstep. */
+function cumulativeTimes(replay: Replay): number[] {
+  const out = [0];
+  for (let i = 1; i < replay.frames.length; i++) out.push(out[i - 1] + (replay.frames[i].latency_ms ?? 0));
+  return out;
+}
+
+const frameIndexAt = (times: number[], elapsedMs: number) => {
+  let i = 0;
+  while (i + 1 < times.length && times[i + 1] <= elapsedMs) i++;
+  return i;
+};
+
+/** Full RunMeta for one replay, popped up on demand so the grid itself can stay to one line per model. */
+function MetaPopup({ meta }: { meta: Replay['meta'] }) {
+  return (
+    <details className="group relative">
+      <summary className="cursor-pointer list-none border border-line px-1 text-beige">?</summary>
+      <div className="absolute right-0 z-20 mt-1 max-h-64 w-72 overflow-auto border border-line bg-panel p-2 text-xs text-cream">
+        {Object.entries(meta).filter(([k]) => k !== 'machine').map(([k, v]) => (
+          <div key={k} className="flex justify-between gap-2 border-b border-line/50 py-0.5">
+            <span className="text-beige">{k}</span>
+            <span className="text-right">{fmt(v)}</span>
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+function SingleReplay({ replay, i, setI, speed, setSpeed }: {
+  replay: Replay;
+  i: number;
+  setI: (n: number) => void;
+  speed: number;
+  setSpeed: (n: number) => void;
+}) {
+  const frame = replay.frames[i];
+  return (
+    <div className="flex flex-wrap gap-4">
+      <div>
+        <div className="mb-2 flex items-center gap-2">
+          {[1, 2, 4].map((s) => (
+            <button key={s} className="border border-line px-2" style={{ color: speed === s ? PALETTE.mustard : undefined }}
+              onClick={() => setSpeed(speed === s ? 0 : s)}>
+              {speed === s ? '❚❚' : '▶'} {s}x
+            </button>
+          ))}
+          <span className="text-beige">no API calls</span>
+          <MetaPopup meta={replay.meta} />
+        </div>
+        <Board w={replay.config.w} h={replay.config.h} snake={frame.snake} food={frame.food}
+          obstacles={replay.obstacles} waiting={false} />
+        <input type="range" min={0} max={replay.frames.length - 1} value={i}
+          onChange={(e) => setI(Number(e.target.value))} className="mt-2 w-[560px]" />
+        <div className="mt-1 flex gap-3">
+          <span>tick {frame.tick}</span>
+          <span>score {frame.score}</span>
+          <span>{STATUS[frame.status].icon} {STATUS[frame.status].label}</span>
+          <span>{frame.latency_ms ?? '—'} ms</span>
+          <span className="text-beige">{replay.meta.model} · {replay.meta.mode} · seed {replay.meta.seed} · try {replay.meta.try}</span>
+        </div>
+      </div>
+      <div className="min-w-[420px] flex-1 space-y-4">
+        <Chart decisions={replay.decisions} />
+        <Feed decisions={replay.decisions.slice(0, i + 1)} pending={null} />
+      </div>
+    </div>
+  );
+}
+
+/** Every board advances on one shared clock, driven by each replay's own recorded latencies — this is the side-by-side speed comparison, not just a synced tick counter. */
+function ParallelReplays({ replays }: { replays: Replay[] }) {
+  const [playing, setPlaying] = useState(false);
+  const [speed, setSpeed] = useState(1);
+  const [pos, setPos] = useState(0);
+  const start = useRef<{ wall: number; pos: number } | null>(null);
+  const tick = useTick(playing);
+
+  const timesByReplay = replays.map(cumulativeTimes);
+  const maxTime = Math.max(...timesByReplay.map((t) => t[t.length - 1]), 1);
+
+  useEffect(() => {
+    if (playing) start.current = { wall: performance.now(), pos };
+  }, [playing]); // pos is read only to seed a fresh start point, not to resync every tick
+
+  const elapsed = playing && start.current
+    ? Math.min(maxTime, start.current.pos + (tick - start.current.wall) * speed)
+    : pos;
+
+  useEffect(() => {
+    if (playing && elapsed >= maxTime) { setPlaying(false); setPos(maxTime); }
+  }, [playing, elapsed, maxTime]);
+
+  return (
+    <div>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <button className="border border-line px-2" onClick={() => setPlaying((p) => !p)}>
+          {playing ? '❚❚ pause' : '▶ play'}
+        </button>
+        {[1, 2, 4, 8].map((s) => (
+          <button key={s} className="border border-line px-2" style={{ color: speed === s ? PALETTE.mustard : undefined }}
+            onClick={() => setSpeed(s)}>
+            {s}x
+          </button>
+        ))}
+        <input type="range" min={0} max={maxTime} value={Math.round(elapsed)}
+          onChange={(e) => { setPlaying(false); setPos(Number(e.target.value)); }} className="w-64" />
+        <span className="text-beige">{(elapsed / 1000).toFixed(1)}s / {(maxTime / 1000).toFixed(1)}s of real response time</span>
+      </div>
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        {replays.map((r, idx) => {
+          const frame = r.frames[frameIndexAt(timesByReplay[idx], elapsed)];
+          return (
+            <div key={r.run_id} className="border border-line p-1">
+              <div className="mb-1 flex items-center justify-between gap-1 text-xs">
+                <span className="min-w-0 truncate text-beige">{r.meta.model} · try {r.meta.try}</span>
+                <MetaPopup meta={r.meta} />
+              </div>
+              <Board w={r.config.w} h={r.config.h} snake={frame.snake} food={frame.food}
+                obstacles={r.obstacles} waiting={false} size={240} />
+              <div className="mt-1 flex flex-wrap gap-2 text-[11px]">
+                <span>tick {frame.tick}</span>
+                <span>score {frame.score}</span>
+                <span style={{ color: STATUS[frame.status].color }}>{STATUS[frame.status].icon}</span>
+                <span>{frame.latency_ms ?? '—'} ms</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+interface ReplayListing { id: string; model: string; mode: string; timestamp: string }
+
 function ReplayViewer() {
-  const [list, setList] = useState<{ id: string }[]>([]);
-  const [replay, setReplay] = useState<Replay | null>(null);
+  const [list, setList] = useState<ReplayListing[]>([]);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [cache, setCache] = useState<Record<string, Replay>>({});
   const [i, setI] = useState(0);
   const [speed, setSpeed] = useState(0);
 
@@ -586,63 +726,45 @@ function ReplayViewer() {
   }, []);
 
   useEffect(() => {
-    if (!speed || !replay) return;
-    const id = setInterval(() => setI((v) => Math.min(v + 1, replay.frames.length - 1)), 200 / speed);
-    return () => clearInterval(id);
-  }, [speed, replay]);
+    const missing = selected.filter((id) => !cache[id]);
+    if (missing.length === 0) return;
+    Promise.all(missing.map((id) => fetch(`/api/replays?id=${id}`).then((r) => r.json() as Promise<Replay>)))
+      .then((loaded) => setCache((c) => ({ ...c, ...Object.fromEntries(loaded.map((r) => [r.run_id, r])) })));
+  }, [selected]); // cache is read only to find what's missing, not a resync trigger
 
-  const frame = replay?.frames[i];
+  useEffect(() => { setI(0); setSpeed(0); }, [selected.length]);
+
+  const toggle = (id: string) =>
+    setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : s.length >= MAX_COMPARE ? s : [...s, id]));
+
+  const replays = selected.map((id) => cache[id]).filter((r): r is Replay => !!r);
+
   return (
-    <div className="flex flex-wrap gap-4">
-      <div>
-        <div className="mb-2 flex items-center gap-2">
-          <select
-            className="w-[320px]"
-            onChange={async (e) => {
-              const r = await fetch(`/api/replays?id=${e.target.value}`).then((x) => x.json());
-              setReplay(r);
-              setI(0);
-              setSpeed(0);
-            }}
-            defaultValue=""
-          >
-            <option value="" disabled>pick a replay ({list.length} saved)</option>
-            {list.map((r) => <option key={r.id} value={r.id}>{r.id}</option>)}
-          </select>
-          {[1, 2, 4].map((s) => (
-            <button key={s} className="border border-line px-2" style={{ color: speed === s ? PALETTE.mustard : undefined }}
-              onClick={() => setSpeed(speed === s ? 0 : s)}>
-              {speed === s ? '❚❚' : '▶'} {s}x
-            </button>
+    <div>
+      <div className="mb-3 flex flex-wrap items-start gap-2">
+        <div className="max-h-40 w-[360px] overflow-y-auto border border-line p-1 text-xs">
+          {list.length === 0 && <span className="text-beige">no replays saved</span>}
+          {list.map((r) => (
+            <label key={r.id} className="flex items-center gap-2 py-0.5" title={r.id}>
+              <input type="checkbox" checked={selected.includes(r.id)}
+                disabled={!selected.includes(r.id) && selected.length >= MAX_COMPARE}
+                onChange={() => toggle(r.id)} />
+              <span className="min-w-0 break-all">
+                {r.model} <span className="text-beige">· {r.mode || '—'} · {r.timestamp ? new Date(r.timestamp).toLocaleString() : '—'}</span>
+              </span>
+            </label>
           ))}
-          <span className="text-beige">no API calls</span>
         </div>
-        {replay && frame ? (
-          <>
-            <Board w={replay.config.w} h={replay.config.h} snake={frame.snake} food={frame.food}
-              obstacles={replay.obstacles} waiting={false} />
-            <input type="range" min={0} max={replay.frames.length - 1} value={i}
-              onChange={(e) => setI(Number(e.target.value))} className="mt-2 w-[560px]" />
-            <div className="mt-1 flex gap-3">
-              <span>tick {frame.tick}</span>
-              <span>score {frame.score}</span>
-              <span>{STATUS[frame.status].icon} {STATUS[frame.status].label}</span>
-              <span>{frame.latency_ms ?? '—'} ms</span>
-              <span className="text-beige">{replay.meta.model} · {replay.meta.mode} · seed {replay.meta.seed}</span>
-            </div>
-          </>
-        ) : (
-          <div className="flex h-[560px] w-[560px] items-center justify-center border border-line text-beige">
-            pick a replay
-          </div>
-        )}
+        <span className="text-beige">{selected.length}/{MAX_COMPARE} selected — check up to {MAX_COMPARE} to play them side by side</span>
       </div>
-      {replay && (
-        <div className="min-w-[420px] flex-1 space-y-4">
-          <Chart decisions={replay.decisions} />
-          <Feed decisions={replay.decisions.slice(0, i + 1)} pending={null} />
+
+      {replays.length === 0 && (
+        <div className="flex h-[560px] w-[560px] items-center justify-center border border-line text-beige">
+          pick a replay
         </div>
       )}
+      {replays.length === 1 && <SingleReplay replay={replays[0]} i={i} setI={setI} speed={speed} setSpeed={setSpeed} />}
+      {replays.length > 1 && <ParallelReplays replays={replays} />}
     </div>
   );
 }

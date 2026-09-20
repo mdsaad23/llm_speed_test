@@ -14,7 +14,7 @@ export const STATUS: Record<DecisionStatus, { icon: string; label: string; color
 
 export const ARROW: Record<string, string> = { UP: '↑', DOWN: '↓', LEFT: '←', RIGHT: '→' };
 
-const fmt = (v: unknown): string => {
+export const fmt = (v: unknown): string => {
   if (v === null || v === undefined) return '—';
   if (typeof v === 'number') return Number.isInteger(v) ? String(v) : v.toFixed(v < 1 ? 5 : 2);
   if (typeof v === 'boolean') return v ? 'yes' : 'no';

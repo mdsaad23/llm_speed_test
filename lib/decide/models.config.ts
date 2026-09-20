@@ -55,6 +55,9 @@ const OLLAMA: ModelEntry[] = [
     note: 'vision model, played on text only: same fixed-output failure as llama3.2:3b, always answers RIGHT regardless of state. Not built for this task.',
   },
   ollama('mistral-small-24b', 'hf.co/bartowski/Mistral-Small-24B-Instruct-2501-GGUF:IQ4_XS'),
+  ollama('mistral-nemo:12b-instruct-2407-q4_K_M'),
+  ollama('glm4:9b-chat-q4_K_M'),
+  ollama('command-r7b:7b-12-2024-q4_K_M'),
   {
     ...ollama('nomic-embed-text:latest'),
     enabled: false,
