@@ -5,6 +5,8 @@ decision is timed, priced and shown live.
 
 Runs locally only. Nothing is deployed, nothing is reported anywhere, and the whole test suite costs $0.
 
+Model-wise scores and behavior for every local model tested so far: [`RESULTS.md`](./RESULTS.md).
+
 ## Setup
 
 ```bash
