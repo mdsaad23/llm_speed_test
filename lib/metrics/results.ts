@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { summaryCsv, type DecisionRecord, type RunRecord } from '@/lib/metrics/metrics';
 import type { Replay } from '@/lib/runner/run';
@@ -14,12 +14,15 @@ export function writeResults(
   opts: { includeFreerun: boolean; includeManual: boolean },
 ) {
   mkdirSync(join(RESULTS_DIR, 'replays'), { recursive: true });
-  appendFileSync(join(RESULTS_DIR, 'runs.jsonl'), jsonl(runs));
+  const runsPath = join(RESULTS_DIR, 'runs.jsonl');
+  appendFileSync(runsPath, jsonl(runs));
   appendFileSync(join(RESULTS_DIR, 'decisions.jsonl'), jsonl(decisions));
   for (const replay of replays) {
     writeFileSync(join(RESULTS_DIR, 'replays', `${replay.run_id}.json`), JSON.stringify(replay));
   }
-  const official = runs.filter(
+  // The CSV is rebuilt from every run ever recorded, so a single UI game cannot wipe a bench sweep.
+  const all: RunRecord[] = readFileSync(runsPath, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  const official = all.filter(
     (r) => (opts.includeFreerun || r.mode !== 'freerun') && (opts.includeManual || !r.manual),
   );
   writeFileSync(join(RESULTS_DIR, 'summary.csv'), summaryCsv(official));

@@ -69,7 +69,7 @@ export interface Replay {
 
 export type RunEvent =
   | { type: 'pending'; tick: number; deadline_ms: number | null; started_at: number }
-  | { type: 'decision'; decision: DecisionRecord; state: State }
+  | { type: 'decision'; decision: DecisionRecord; state: State; run: RunRecord }
   | { type: 'end'; run: RunRecord };
 
 export interface RunOptions {
@@ -217,6 +217,26 @@ export async function runGame(opts: RunOptions): Promise<{ run: RunRecord; decis
     return { decision: status === 'ok' ? decision : null, record };
   };
 
+  /** The full §4 record for the game so far: the end result, and what the UI shows live. */
+  const summary = (): RunRecord => {
+    const latencies = decisions.filter((d) => d.status === 'ok' && d.latency_ms !== null).map((d) => d.latency_ms!);
+    const reference = opts.turnP50Ms ?? percentile(latencies, 50);
+    return summarizeRun(meta, decisions, {
+      score: state.score,
+      finalLength: state.snake.length,
+      survivalSeconds: (now() - started) / 1000,
+      survivalTicks: state.tick,
+      endReason: state.endReason,
+      rejectedReversal: state.rejectedReversal,
+      deadlineAtDeathMs,
+      foodPathLengths: foodPathLengths.slice(0, foodTickCosts.length),
+      foodTickCosts,
+      foodSecondCosts,
+      predictedBreakpointK: reference === null ? null : deadlineBreakpoint(cfg, reference),
+    });
+  };
+
+
   const advance = (move: Dir | null, record: DecisionRecord | null) => {
     const before = state.score;
     state = step(state, move, cfg);
@@ -233,7 +253,7 @@ export async function runGame(opts: RunOptions): Promise<{ run: RunRecord; decis
       foodStartMs = now();
       if (state.food) foodPathLengths.push(bfsDistance(state, cfg, state.snake[0], state.food) ?? 0);
     }
-    if (record) opts.onEvent?.({ type: 'decision', decision: record, state });
+    if (record && opts.onEvent) opts.onEvent({ type: 'decision', decision: record, state, run: summary() });
   };
 
   try {
@@ -278,22 +298,7 @@ export async function runGame(opts: RunOptions): Promise<{ run: RunRecord; decis
     else throw e;
   }
 
-  const latencies = decisions.filter((d) => d.status === 'ok' && d.latency_ms !== null).map((d) => d.latency_ms!);
-  const reference = opts.turnP50Ms ?? percentile(latencies, 50);
-  const run = summarizeRun(meta, decisions, {
-    score: state.score,
-    finalLength: state.snake.length,
-    survivalSeconds: (now() - started) / 1000,
-    survivalTicks: state.tick,
-    endReason: state.endReason,
-    rejectedReversal: state.rejectedReversal,
-    deadlineAtDeathMs,
-    foodPathLengths: foodPathLengths.slice(0, foodTickCosts.length),
-    foodTickCosts,
-    foodSecondCosts,
-    predictedBreakpointK: reference === null ? null : deadlineBreakpoint(cfg, reference),
-  });
-
+  const run = summary();
   opts.onEvent?.({ type: 'end', run });
   return { run, decisions, replay: { run_id: meta.run_id, meta, config: cfg, obstacles, frames, decisions } };
 }

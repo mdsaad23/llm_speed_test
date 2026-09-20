@@ -1,0 +1,34 @@
+@import 'tailwindcss';
+
+/* Earthy by policy: no blue, purple or indigo anywhere in this app. */
+@theme {
+  --color-ink: #17120d;
+  --color-panel: #221b14;
+  --color-line: #3b3128;
+  --color-cream: #f3e9d6;
+  --color-beige: #cdb992;
+  --color-olive: #8a9b46;
+  --color-rust: #c0431c;
+  --color-clay: #c07a4e;
+  --color-mustard: #e3a91c;
+  --font-mono: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+}
+
+body {
+  background: var(--color-ink);
+  color: var(--color-cream);
+  font-family: var(--font-mono);
+}
+
+input,
+select {
+  background: var(--color-ink);
+  border: 1px solid var(--color-line);
+  border-radius: 2px;
+  padding: 2px 6px;
+  color: var(--color-cream);
+}
+
+summary {
+  cursor: pointer;
+}
