@@ -3,3 +3,9 @@ node_modules
 .env.local
 results
 *.tsbuildinfo
+
+# local tool state, not part of the app
+.headroom
+.tokensave
+.claude
+.graphify

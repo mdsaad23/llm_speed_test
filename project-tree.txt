@@ -1,0 +1,50 @@
+SnakeBench
++---app
+|   +---api
+|   |   +---replays
+|   |   |   \---route.ts
+|   |   \---run
+|   |       +---route.test.ts
+|   |       \---route.ts
+|   +---board.tsx
+|   +---globals.css
+|   +---layout.tsx
+|   +---page.tsx
+|   \---panels.tsx
++---lib
+|   +---decide
+|   |   +---adapters.ts
+|   |   +---models.config.ts
+|   |   +---pricing.json
+|   |   +---pricing.ts
+|   |   +---prompt.ts
+|   |   +---providers.test.ts
+|   |   \---providers.ts
+|   +---game
+|   |   +---engine.test.ts
+|   |   \---engine.ts
+|   +---metrics
+|   |   +---metrics.ts
+|   |   \---results.ts
+|   \---runner
+|       +---run.test.ts
+|       \---run.ts
++---scripts
+|   +---bench.test.ts
+|   \---bench.ts
++---.env.example
++---.gitignore
++---CLAUDE.md
++---PLAN.md
++---README.md
++---eslint.config.mjs
++---next-env.d.ts
++---next.config.ts
++---package.json
++---pnpm-lock.yaml
++---pnpm-workspace.yaml
++---postcss.config.mjs
++---project-tree.txt
++---snake-llm-bench-prompt.md
++---tsconfig.json
+\---vitest.config.ts
