@@ -43,9 +43,16 @@ Results land in `results/`:
 corepack pnpm dev      # http://localhost:3000
 ```
 
-The browser only runs free models (`mock`, `mock:slow`, `baseline:greedy-bfs`, `baseline:random`). Paid models
-are CLI-only, where the estimate and confirmation live. `mock:slow` is the interesting one: it is slow and
-jittery enough to drive the board through timeouts, invalid replies and errors without spending anything.
+The browser only runs free models: the mocks, the baselines and every local Ollama tag. It reads that list from
+`/api/models`, which serves the enabled, unpaid entries of `models.config.ts`. Paid models are CLI-only, where
+the estimate and confirmation live. `mock:slow` is the interesting one: it is slow and jittery enough to drive
+the board through timeouts, invalid replies and errors without spending anything.
+
+Tick the models you want in the manual panel (`all` / `ollama` / `none` select in bulk) and the browser plays
+them one at a time, model × try, with the leaderboard filling up as they finish. One game at a time: a local
+GPU has no parallelism to give. Each Ollama run is warmed up before the clock starts — the header says
+`LOADING MODEL` while a cold 26B lands in VRAM — and the weights are released the moment the run ends, so the
+next model is not measured through a full GPU.
 
 ## The three clocks
 

@@ -1,6 +1,11 @@
 SnakeBench
 +---app
 |   +---api
+|   |   +---models
+|   |   |   \---route.ts
+|   |   +---prompt
+|   |   |   +---route.test.ts
+|   |   |   \---route.ts
 |   |   +---replays
 |   |   |   \---route.ts
 |   |   \---run

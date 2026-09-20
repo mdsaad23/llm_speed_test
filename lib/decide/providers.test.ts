@@ -37,7 +37,8 @@ describe('ollama adapter', () => {
     expect(sent.request.think).toBe(false);
     expect(sent.request.stream).toBe(false);
     expect(sent.request.keep_alive).toBe('10m');
-    expect(sent.request.format.properties.move.enum).toEqual(['UP', 'DOWN', 'LEFT', 'RIGHT']);
+    // The snake starts facing RIGHT, so LEFT is never even offered as a token.
+    expect(sent.request.format.properties.move.enum).toEqual(['UP', 'DOWN', 'RIGHT']);
 
     expect(decision.move).toBe('UP');
     expect(decision.usage).toMatchObject({ input: 120, output: 4, estimated: false });

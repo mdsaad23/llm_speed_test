@@ -1,4 +1,4 @@
-import { DIRS, bfsDistance, nextCell, safeMoves, type Cell, type Config, type Dir, type State } from '@/lib/game/engine';
+import { DIRS, bfsDistance, nextCell, opposite, safeMoves, type Cell, type Config, type Dir, type State } from '@/lib/game/engine';
 import type { ClockMode } from '@/lib/decide/prompt';
 
 export interface DecideContext {
@@ -41,6 +41,8 @@ export interface Adapter {
   streams: boolean;
   decide(ctx: DecideContext): Promise<Decision>;
   warmup?(cfg: Config): Promise<void>;
+  /** Hand the weights back when the run is over, so the next model is not measured through a full GPU. */
+  unload?(): Promise<void>;
 }
 
 export const now = () => performance.now();
@@ -77,9 +79,6 @@ export const randomAdapter = (seed = 1): Adapter => {
     },
   };
 };
-
-const opposite = (d: Dir): Dir =>
-  ({ UP: 'DOWN', DOWN: 'UP', LEFT: 'RIGHT', RIGHT: 'LEFT' } as const)[d];
 
 /** Free cells reachable from a square — used to avoid walking into a pocket. */
 function openArea(s: State, cfg: Config, from: Cell): number {

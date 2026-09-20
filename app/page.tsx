@@ -8,13 +8,13 @@ import type { DecisionRecord, RunRecord } from '@/lib/metrics/metrics';
 import type { Replay } from '@/lib/runner/run';
 import type { UiEvent } from './api/run/route';
 
-/** Paid models are deliberately absent: the browser can only run what costs nothing. */
-const FREE_MODELS = ['mock', 'mock:slow', 'baseline:greedy-bfs', 'baseline:random'];
+interface FreeModel { id: string; note: string | null }
+
 const SEEDS = [101, 102, 103];
 const MODES = ['deadline', 'turn', 'freerun'] as const;
 
 type Form = Config & {
-  model: string;
+  models: string[];
   mode: (typeof MODES)[number];
   hints: boolean;
   tries: number;
@@ -24,7 +24,7 @@ type Form = Config & {
 
 const DEFAULTS: Form = {
   ...defaultConfig(),
-  model: 'mock',
+  models: ['mock'],
   mode: 'deadline',
   hints: false,
   tries: 3,
@@ -41,6 +41,7 @@ const isOfficial = (f: Form, seed: number) => {
 
 function problems(f: Form): string[] {
   const out: string[] = [];
+  if (f.models.length === 0) out.push('pick at least one model');
   if (f.w < 5 || f.h < 5) out.push('grid must be at least 5x5');
   if (f.minDeadlineMs > f.baseDeadlineMs) out.push('min deadline cannot exceed base deadline');
   if (f.level === 2 && f.obstacleCount > Math.floor((f.w * f.h) / 6)) out.push('too many obstacles for this grid');
@@ -52,10 +53,13 @@ function problems(f: Form): string[] {
 
 export default function Page() {
   const [form, setForm] = useState<Form>(DEFAULTS);
+  const [available, setAvailable] = useState<FreeModel[]>([]);
   const [view, setView] = useState<'live' | 'replay'>('live');
   const [confirming, setConfirming] = useState(false);
   const [running, setRunning] = useState(false);
   const [queueLeft, setQueueLeft] = useState(0);
+  const [current, setCurrent] = useState(DEFAULTS.models[0]);
+  const [warming, setWarming] = useState(false);
   const [tryNo, setTryNo] = useState(1);
   const [cfg, setCfg] = useState<Config>(DEFAULTS);
   const [state, setState] = useState<State | null>(null);
@@ -67,6 +71,10 @@ export default function Page() {
   const [fatal, setFatal] = useState<string | null>(null);
   const abort = useRef<AbortController | null>(null);
 
+  useEffect(() => {
+    fetch('/api/models').then((r) => r.json()).then(setAvailable).catch(() => setAvailable([]));
+  }, []);
+
   const set = <K extends keyof Form>(k: K, v: Form[K]) => setForm((f) => ({ ...f, [k]: v }));
   const errors = problems(form);
   const spend = 0; // free models only, priced at zero by definition
@@ -77,13 +85,18 @@ export default function Page() {
 
   const handle = (e: UiEvent) => {
     if (e.type === 'start') {
+      setCurrent(e.model);
       setCfg(e.cfg);
       setState(e.state);
       setDecisions([]);
       setRun(null);
       setLast(null);
       setPending(null);
+      setWarming(false);
+    } else if (e.type === 'warmup') {
+      setWarming(true);
     } else if (e.type === 'pending') {
+      setWarming(false);
       setPending({ tick: e.tick, deadline_ms: e.deadline_ms, at: performance.now() });
     } else if (e.type === 'decision') {
       setPending(null);
@@ -93,17 +106,19 @@ export default function Page() {
       setLast(e.decision);
     } else if (e.type === 'end') {
       setPending(null);
+      setWarming(false);
       setRun(e.run);
       setRuns((r) => [...r, e.run]);
     } else {
+      setWarming(false);
       setFatal(e.message);
     }
   };
 
-  const runOne = async (t: number, signal: AbortSignal) => {
+  const runOne = async (model: string, t: number, signal: AbortSignal) => {
     const seed = isOfficial(form, SEEDS[(t - 1) % SEEDS.length]) ? SEEDS[(t - 1) % SEEDS.length] : form.seed;
-    const { model, mode, hints, displayMinTickMs, maxUsdPerRun, ...rest } = form;
-    const cfgBody = { ...defaultConfig(rest), seed };
+    const { mode, hints, displayMinTickMs, maxUsdPerRun } = form;
+    const cfgBody = { ...defaultConfig(form), seed };
     const res = await fetch('/api/run', {
       method: 'POST',
       signal,
@@ -142,60 +157,51 @@ export default function Page() {
     const ctrl = new AbortController();
     abort.current = ctrl;
     setRunning(true);
-    for (let t = 1; t <= form.tries && !ctrl.signal.aborted; t++) {
-      setTryNo(t);
-      setQueueLeft(form.tries - t);
+    // model × try, one game at a time: a local GPU has no parallelism to give.
+    const queue = form.models.flatMap((m) => Array.from({ length: form.tries }, (_, i) => ({ model: m, try: i + 1 })));
+    for (const [i, game] of queue.entries()) {
+      if (ctrl.signal.aborted) break;
+      setTryNo(game.try);
+      setQueueLeft(queue.length - i - 1);
       try {
-        await runOne(t, ctrl.signal);
+        await runOne(game.model, game.try, ctrl.signal);
       } catch (e) {
-        if (!ctrl.signal.aborted) setFatal(e instanceof Error ? e.message : String(e));
-        break;
+        // One model failing is that model's result, not the end of the sweep.
+        if (ctrl.signal.aborted) break;
+        setFatal(`${game.model}: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
     setRunning(false);
   };
 
-  const status = fatal ? `FAILED: ${fatal}` : running ? (pending ? 'WAITING FOR MOVE' : 'RUNNING') : 'IDLE';
+  const status = fatal ? `FAILED: ${fatal}` : running
+    ? (warming ? 'LOADING MODEL' : pending ? 'WAITING FOR MOVE' : 'RUNNING')
+    : 'IDLE';
 
   return (
     <main className="mx-auto max-w-[1400px] p-4 text-sm">
       <header className="mb-3 flex flex-wrap items-center gap-3 border-b border-line pb-2">
         <h1 className="text-mustard text-lg">SnakeBench</h1>
-        <span className="text-beige">{form.model}</span>
+        <span className="text-beige">{current}</span>
         <span>level {form.level}</span>
         <span>try {tryNo}/{form.tries}</span>
         <span className="border border-line px-1 uppercase" style={{ color: PALETTE.clay }}>{form.mode}</span>
         <span style={{ color: fatal ? PALETTE.rust : PALETTE.olive }}>● {status}</span>
         <span className="text-beige">queue {queueLeft}</span>
         <span className="text-beige">spent ${sessionSpend.toFixed(5)}</span>
-        <div className="ml-auto flex gap-2">
-          <button className="border border-line px-2 py-0.5" onClick={() => setView(view === 'live' ? 'replay' : 'live')}>
-            {view === 'live' ? 'Replays' : 'Live'}
-          </button>
-          <button
-            className="border border-line px-2 py-0.5 disabled:opacity-40"
-            style={{ color: PALETTE.olive }}
-            disabled={running || errors.length > 0}
-            onClick={() => setConfirming(true)}
-          >
-            Start
-          </button>
-          <button
-            className="border border-line px-2 py-0.5 disabled:opacity-40"
-            style={{ color: PALETTE.rust }}
-            disabled={!running}
-            onClick={() => abort.current?.abort()}
-          >
-            Abort
-          </button>
-        </div>
+        <button className="ml-auto border border-line px-2 py-0.5" onClick={() => setView(view === 'live' ? 'replay' : 'live')}>
+          {view === 'live' ? 'Replays' : 'Live'}
+        </button>
       </header>
 
       {confirming && (
         <div className="fixed inset-0 z-10 flex items-center justify-center bg-ink/80">
           <div className="w-[520px] border border-line bg-panel p-4">
-            <h2 className="mb-2 text-mustard">Start {form.tries} game(s)?</h2>
-            <p>{form.model} · {form.mode} · level {form.level} · {form.w}x{form.h}</p>
+            <h2 className="mb-2 text-mustard">
+              Start {form.models.length * form.tries} game(s)? — {form.models.length} model(s) × {form.tries} tries
+            </h2>
+            <p>{form.mode} · level {form.level} · {form.w}x{form.h} · up to {form.maxGameSeconds}s per game</p>
+            <p className="mt-1 max-h-24 overflow-auto break-all text-beige">{form.models.join(', ')}</p>
             <p className="mt-2">
               Worst case spend: <span className="text-mustard">${spend.toFixed(4)}</span> — free model, no API calls are billed.
             </p>
@@ -271,12 +277,33 @@ export default function Page() {
             </div>
           </div>
 
-          <Rail run={run} deadlineMs={deadline} />
+          <div className="w-72 shrink-0">
+            <div className="mb-3 flex gap-2">
+              <button
+                className="flex-1 border-2 border-line py-3 text-base uppercase tracking-wide disabled:opacity-40"
+                style={{ color: PALETTE.olive, borderColor: running || errors.length > 0 ? undefined : PALETTE.olive }}
+                disabled={running || errors.length > 0}
+                onClick={() => setConfirming(true)}
+              >
+                ▶ Start
+              </button>
+              <button
+                className="flex-1 border-2 border-line py-3 text-base uppercase tracking-wide disabled:opacity-40"
+                style={{ color: PALETTE.rust, borderColor: running ? PALETTE.rust : undefined }}
+                disabled={!running}
+                onClick={() => abort.current?.abort()}
+              >
+                ■ Abort
+              </button>
+            </div>
+            <Rail run={run} deadlineMs={deadline} />
+          </div>
 
           <div className="min-w-[420px] flex-1 space-y-4">
             <Feed decisions={decisions} pending={pending} />
             <Leaderboard runs={runs} />
-            <Manual form={form} set={set} errors={errors} disabled={running} />
+            <PromptPanel form={form} />
+            <Manual form={form} set={set} errors={errors} disabled={running} available={available} />
           </div>
         </div>
       )}
@@ -284,59 +311,117 @@ export default function Page() {
   );
 }
 
-function Num({ label, value, onChange, step = 1 }: { label: string; value: number; onChange: (v: number) => void; step?: number }) {
+const HELP: Record<string, string> = {
+  models:
+    'Every free model the server offers. Each checked model plays the whole queue (tries × games) one at a time — a local GPU has no parallelism to give. Paid models stay on the CLI.',
+  mode:
+    'How the clock treats thinking time. deadline: the board is frozen, but an answer later than the deadline is thrown away and the snake goes straight. turn: frozen and waits forever, so latency never kills you. freerun: the snake keeps moving while the model thinks — demo only, not comparable.',
+  w: 'Board width in cells. Official runs are 20x20; changing it marks the run manual.',
+  h: 'Board height in cells. Official runs are 20x20; changing it marks the run manual.',
+  level: '1 — open board, walls only. 2 — obstacle cells scattered from the seed, always leaving the board fully connected.',
+  obstacleCount: 'How many obstacle cells to place. Level 2 only; ignored at level 1.',
+  seed: 'Seeds the obstacles and every food placement, so the same seed replays the same board. Official runs use 101, 102, 103 — one per try.',
+  tries: 'Games per model. Try 1 gets seed 101, try 2 seed 102, try 3 seed 103, then it wraps.',
+  baseDeadlineMs: 'Time budget for the first move, before any food. It shrinks with every point scored.',
+  minDeadlineMs: 'Floor for the deadline: no matter how high the score, the model always gets at least this long.',
+  paceFactor: 'How much the game tightens per food: deadline = base ÷ factor^score. 1.05 means 5% less time after every point.',
+  baseSpeedCps: 'freerun only: cells per second the snake crawls before any food, sped up by the same pace factor.',
+  maxGameSeconds: 'Wall-clock cap on one game. Hitting it ends the run with time_limit and marks the result censored.',
+  maxCallsPerGame: 'Cap on model calls in one game, so a model that circles forever still terminates.',
+  displayMinTickMs: 'Minimum time the board holds each frame so fast models stay watchable. Display only — measured latency is untouched.',
+  maxUsdPerRun: 'Budget guard: the run stops as soon as estimated spend passes this. Free models are priced at zero, so it never trips here.',
+  hints: 'Adds safe-move flags and food-distance deltas to the state JSON, doing part of the thinking for the model. Hinted runs are excluded from the official summary.',
+};
+
+function Help({ k }: { k: keyof typeof HELP }) {
+  return (
+    <span tabIndex={0} className="group relative cursor-help border border-line px-1 text-beige" aria-label={HELP[k]}>
+      ?
+      <span className="pointer-events-none absolute bottom-full right-0 z-20 mb-1 hidden w-64 whitespace-normal border border-line bg-panel p-2 text-cream group-hover:block group-focus:block">
+        {HELP[k]}
+      </span>
+    </span>
+  );
+}
+
+function Num({ label, help, value, onChange, step = 1 }: {
+  label: string;
+  help: keyof typeof HELP;
+  value: number;
+  onChange: (v: number) => void;
+  step?: number;
+}) {
   return (
     <label className="flex items-center justify-between gap-2">
-      <span className="text-beige">{label}</span>
-      <input type="number" step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} className="w-28 text-right" />
+      <span className="flex items-center gap-1 text-beige">{label} <Help k={help} /></span>
+      <input type="number" step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} className="w-24 text-right" />
     </label>
   );
 }
 
-function Manual({ form, set, errors, disabled }: {
+function Manual({ form, set, errors, disabled, available }: {
   form: Form;
   set: <K extends keyof Form>(k: K, v: Form[K]) => void;
   errors: string[];
   disabled: boolean;
+  available: FreeModel[];
 }) {
+  const toggle = (id: string) =>
+    set('models', form.models.includes(id) ? form.models.filter((m) => m !== id) : [...form.models, id]);
+  const pick = (test: (id: string) => boolean) => set('models', available.filter((m) => test(m.id)).map((m) => m.id));
+
   return (
     <details className="border border-line p-2 text-xs" open>
       <summary className="text-mustard">Manual mode</summary>
+      <fieldset disabled={disabled} className="mt-2">
+        <div className="mb-1 flex flex-wrap items-center gap-2">
+          <span className="flex items-center gap-1 text-beige">models ({form.models.length}/{available.length}) <Help k="models" /></span>
+          <button className="border border-line px-2" onClick={() => pick(() => true)}>all</button>
+          <button className="border border-line px-2" onClick={() => pick((id) => id.startsWith('ollama:'))}>ollama</button>
+          <button className="border border-line px-2" onClick={() => set('models', [])}>none</button>
+        </div>
+        <div className="mb-2 max-h-44 overflow-y-auto border border-line p-1">
+          {available.length === 0 && <span className="text-beige">no free models</span>}
+          {available.map((m) => (
+            <label key={m.id} className="flex items-start gap-2 py-0.5">
+              <input type="checkbox" className="mt-0.5 shrink-0" checked={form.models.includes(m.id)} onChange={() => toggle(m.id)} />
+              <span className="min-w-0 break-all">
+                {m.id}
+                {m.note && <span className="text-beige"> — {m.note}</span>}
+              </span>
+            </label>
+          ))}
+        </div>
+      </fieldset>
       <fieldset disabled={disabled} className="mt-2 grid grid-cols-2 gap-x-6 gap-y-1">
         <label className="flex items-center justify-between gap-2">
-          <span className="text-beige">model</span>
-          <select value={form.model} onChange={(e) => set('model', e.target.value)} className="w-28">
-            {FREE_MODELS.map((m) => <option key={m} value={m}>{m}</option>)}
-          </select>
-        </label>
-        <label className="flex items-center justify-between gap-2">
-          <span className="text-beige">clock</span>
-          <select value={form.mode} onChange={(e) => set('mode', e.target.value as Form['mode'])} className="w-28">
+          <span className="flex items-center gap-1 text-beige">clock <Help k="mode" /></span>
+          <select value={form.mode} onChange={(e) => set('mode', e.target.value as Form['mode'])} className="w-24">
             {MODES.map((m) => <option key={m} value={m}>{m}</option>)}
           </select>
         </label>
-        <Num label="grid w" value={form.w} onChange={(v) => set('w', v)} />
-        <Num label="grid h" value={form.h} onChange={(v) => set('h', v)} />
+        <Num label="grid w" help="w" value={form.w} onChange={(v) => set('w', v)} />
+        <Num label="grid h" help="h" value={form.h} onChange={(v) => set('h', v)} />
         <label className="flex items-center justify-between gap-2">
-          <span className="text-beige">level</span>
-          <select value={form.level} onChange={(e) => set('level', Number(e.target.value) as Config['level'])} className="w-28">
+          <span className="flex items-center gap-1 text-beige">level <Help k="level" /></span>
+          <select value={form.level} onChange={(e) => set('level', Number(e.target.value) as Config['level'])} className="w-24">
             <option value={1}>1 — open</option>
             <option value={2}>2 — obstacles</option>
           </select>
         </label>
-        <Num label="obstacles" value={form.obstacleCount} onChange={(v) => set('obstacleCount', v)} />
-        <Num label="seed" value={form.seed} onChange={(v) => set('seed', v)} />
-        <Num label="tries" value={form.tries} onChange={(v) => set('tries', v)} />
-        <Num label="base deadline ms" value={form.baseDeadlineMs} onChange={(v) => set('baseDeadlineMs', v)} step={100} />
-        <Num label="min deadline ms" value={form.minDeadlineMs} onChange={(v) => set('minDeadlineMs', v)} step={50} />
-        <Num label="pace factor" value={form.paceFactor} onChange={(v) => set('paceFactor', v)} step={0.01} />
-        <Num label="base speed cps" value={form.baseSpeedCps} onChange={(v) => set('baseSpeedCps', v)} step={0.5} />
-        <Num label="max game seconds" value={form.maxGameSeconds} onChange={(v) => set('maxGameSeconds', v)} step={10} />
-        <Num label="max calls / game" value={form.maxCallsPerGame} onChange={(v) => set('maxCallsPerGame', v)} step={10} />
-        <Num label="display tick ms" value={form.displayMinTickMs} onChange={(v) => set('displayMinTickMs', v)} step={10} />
-        <Num label="max $ / run" value={form.maxUsdPerRun} onChange={(v) => set('maxUsdPerRun', v)} step={0.1} />
+        <Num label="obstacles" help="obstacleCount" value={form.obstacleCount} onChange={(v) => set('obstacleCount', v)} />
+        <Num label="seed" help="seed" value={form.seed} onChange={(v) => set('seed', v)} />
+        <Num label="tries" help="tries" value={form.tries} onChange={(v) => set('tries', v)} />
+        <Num label="base deadline ms" help="baseDeadlineMs" value={form.baseDeadlineMs} onChange={(v) => set('baseDeadlineMs', v)} step={100} />
+        <Num label="min deadline ms" help="minDeadlineMs" value={form.minDeadlineMs} onChange={(v) => set('minDeadlineMs', v)} step={50} />
+        <Num label="pace factor" help="paceFactor" value={form.paceFactor} onChange={(v) => set('paceFactor', v)} step={0.01} />
+        <Num label="base speed cps" help="baseSpeedCps" value={form.baseSpeedCps} onChange={(v) => set('baseSpeedCps', v)} step={0.5} />
+        <Num label="max game seconds" help="maxGameSeconds" value={form.maxGameSeconds} onChange={(v) => set('maxGameSeconds', v)} step={10} />
+        <Num label="max calls / game" help="maxCallsPerGame" value={form.maxCallsPerGame} onChange={(v) => set('maxCallsPerGame', v)} step={10} />
+        <Num label="display tick ms" help="displayMinTickMs" value={form.displayMinTickMs} onChange={(v) => set('displayMinTickMs', v)} step={10} />
+        <Num label="max $ / run" help="maxUsdPerRun" value={form.maxUsdPerRun} onChange={(v) => set('maxUsdPerRun', v)} step={0.1} />
         <label className="flex items-center justify-between gap-2">
-          <span className="text-beige">hints</span>
+          <span className="flex items-center gap-1 text-beige">hints <Help k="hints" /></span>
           <input type="checkbox" checked={form.hints} onChange={(e) => set('hints', e.target.checked)} />
         </label>
       </fieldset>
@@ -357,6 +442,42 @@ function Manual({ form, set, errors, disabled }: {
         Worst-case spend for this configuration: $0.0000 — the browser can only run free models. Reasoning and max_tokens
         live in models.config.ts, where paid runs read them.
       </p>
+    </details>
+  );
+}
+
+interface PromptPreview { system: string; example: string; schema: string; version: string }
+
+/** Built server-side from the configured board, so what is shown here is literally what the adapter sends. */
+function PromptPanel({ form }: { form: Form }) {
+  const [p, setP] = useState<PromptPreview | null>(null);
+  const { mode, hints, w, h, level, obstacleCount, seed, baseDeadlineMs, minDeadlineMs, paceFactor, baseSpeedCps } = form;
+
+  useEffect(() => {
+    const q = { mode, hints, w, h, level, obstacleCount, seed, baseDeadlineMs, minDeadlineMs, paceFactor, baseSpeedCps };
+    const params = new URLSearchParams(Object.entries(q).map(([k, v]) => [k, String(v)]));
+    fetch(`/api/prompt?${params}`).then((r) => r.json()).then(setP).catch(() => setP(null));
+  }, [mode, hints, w, h, level, obstacleCount, seed, baseDeadlineMs, minDeadlineMs, paceFactor, baseSpeedCps]);
+
+  const block = (title: string, body: string) => (
+    <>
+      <p className="mt-2 text-beige">{title}</p>
+      <pre className="mt-0.5 max-h-40 overflow-auto whitespace-pre-wrap break-all border border-line p-2">{body}</pre>
+    </>
+  );
+
+  return (
+    <details className="border border-line p-2 text-xs">
+      <summary className="text-mustard">Prompt sent to the model {p && <span className="text-beige">· version {p.version}</span>}</summary>
+      {p ? (
+        <>
+          {block('system message — identical on every call, so providers can cache it', p.system)}
+          {block('user message — the whole board, resent from scratch each move (shown at tick 0)', p.example)}
+          {block('the reply is parsed against this schema; anything else counts as invalid', p.schema)}
+        </>
+      ) : (
+        <p className="mt-2 text-beige">loading…</p>
+      )}
     </details>
   );
 }

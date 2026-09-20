@@ -187,6 +187,8 @@ export const end = (s: State, reason: EndReason): State =>
 
 export const nextCell = (from: Cell, d: Dir): Cell => [from[0] + STEP[d][0], from[1] + STEP[d][1]];
 
+export const opposite = (d: Dir): Dir => OPPOSITE[d];
+
 const blocked = (s: State, cfg: Config, c: Cell) =>
   c[0] < 0 || c[1] < 0 || c[0] >= cfg.w || c[1] >= cfg.h ||
   has(s.obstacles, c) || has(s.snake.slice(0, -1), c);

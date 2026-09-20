@@ -30,7 +30,11 @@ const body = z.object({
 });
 
 export type StartEvent = { type: 'start'; cfg: Config; state: State; model: string; try: number };
-export type UiEvent = StartEvent | RunEvent | { type: 'fatal'; message: string };
+export type UiEvent =
+  | StartEvent
+  | RunEvent
+  | { type: 'warmup'; model: string }
+  | { type: 'fatal'; message: string };
 
 export async function POST(req: Request) {
   const parsed = body.safeParse(await req.json());
@@ -61,15 +65,18 @@ export async function POST(req: Request) {
     manual_params: opts.manual ? { ...opts.cfg, displayMinTickMs: opts.displayMinTickMs } : undefined,
   };
 
+  const adapter = createAdapter(entry, cfg.seed);
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
       const send = (e: UiEvent) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(e)}\n\n`));
       send({ type: 'start', cfg, state: createGame(cfg), model: entry.id, try: opts.try });
+      // A cold 26B can take a minute to land in VRAM: say so rather than show a frozen board.
+      if (adapter.warmup) send({ type: 'warmup', model: entry.id });
       try {
         const { run, decisions, replay } = await runGame({
           cfg,
-          adapter: createAdapter(entry, cfg.seed),
+          adapter,
           mode: opts.mode,
           hints: opts.hints,
           meta,
@@ -84,6 +91,7 @@ export async function POST(req: Request) {
       } catch (e) {
         send({ type: 'fatal', message: e instanceof Error ? e.message : String(e) });
       }
+      await adapter.unload?.();
       controller.close();
     },
   });

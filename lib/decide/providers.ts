@@ -1,6 +1,6 @@
 import { experimental_evaluate, generateObject } from 'ai';
 import { z } from 'zod';
-import { moveSchema, stateJson, systemPrompt } from '@/lib/decide/prompt';
+import { MOVE_MEANING, legalMoves, moveSchema, moveSchemaFor, stateJson, systemPrompt } from '@/lib/decide/prompt';
 import { now, type Adapter, type DecideContext, type Decision, type Usage } from '@/lib/decide/adapters';
 import type { ModelEntry } from '@/lib/decide/models.config';
 import type { Dir } from '@/lib/game/engine';
@@ -51,7 +51,7 @@ export const gatewayAdapter = (entry: ModelEntry): Adapter => ({
     const tRequestSent = now();
     const result = await generateObject({
       model: entry.route,
-      schema: moveSchema,
+      schema: moveSchemaFor(state.dir),
       system: systemPrompt(mode),
       prompt: stateJson(state, cfg, mode, hints),
       temperature: 0,
@@ -71,13 +71,6 @@ export const gatewayAdapter = (entry: ModelEntry): Adapter => ({
   },
 });
 
-const CRITERIA = {
-  UP: 'Move the head one cell up (y - 1).',
-  DOWN: 'Move the head one cell down (y + 1).',
-  LEFT: 'Move the head one cell left (x - 1).',
-  RIGHT: 'Move the head one cell right (x + 1).',
-} as const;
-
 /** TypeSafe AI's Jev is a typed-decision model: one choice question over the four moves. */
 export const jevAdapter = (entry: ModelEntry): Adapter => ({
   id: entry.id,
@@ -89,7 +82,11 @@ export const jevAdapter = (entry: ModelEntry): Adapter => ({
       model: entry.route,
       state: JSON.parse(stateJson(state, cfg, mode, hints)),
       questions: {
-        move: { type: 'choice', instructions: systemPrompt(mode), criteria: CRITERIA },
+        move: {
+          type: 'choice',
+          instructions: systemPrompt(mode),
+          criteria: Object.fromEntries(legalMoves(state.dir).map((d) => [d, MOVE_MEANING[d]])),
+        },
       },
       maxRetries: 0,
       abortSignal: signal,
@@ -114,12 +111,13 @@ interface OllamaChatResponse {
   prompt_eval_count?: number;
   eval_count?: number;
   eval_duration?: number;
+  done_reason?: string;
   prompt_eval_duration?: number;
   total_duration?: number;
   load_duration?: number;
 }
 
-async function ollamaChat(entry: ModelEntry, system: string, user: string, signal: AbortSignal) {
+async function ollamaChat(entry: ModelEntry, system: string, user: string, format: unknown, signal: AbortSignal) {
   const response = await fetch(`${OLLAMA_HOST()}/api/chat`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -129,7 +127,7 @@ async function ollamaChat(entry: ModelEntry, system: string, user: string, signa
       stream: false,
       think: false,
       keep_alive: '10m',
-      format: z.toJSONSchema(moveSchema),
+      format,
       options: { temperature: 0, num_predict: entry.maxTokens },
       messages: [
         { role: 'system', content: system },
@@ -151,13 +149,23 @@ export const ollamaAdapter = (entry: ModelEntry): Adapter => ({
   streams: false,
   async warmup(cfg) {
     const signal = AbortSignal.timeout(entry.timeoutMs || 120_000);
-    await ollamaChat(entry, systemPrompt('deadline'), `{"grid":{"w":${cfg.w},"h":${cfg.h}},"warmup":true}`, signal);
+    const format = z.toJSONSchema(moveSchemaFor('RIGHT'));
+    await ollamaChat(entry, systemPrompt('deadline'), `{"grid":{"w":${cfg.w},"h":${cfg.h}},"warmup":true}`, format, signal);
+  },
+  async unload() {
+    await fetch(`${OLLAMA_HOST()}/api/generate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: entry.route, keep_alive: 0 }),
+    }).catch(() => {});
   },
   async decide({ state, cfg, mode, hints, signal }: DecideContext): Promise<Decision> {
     const tRequestSent = now();
-    const body = await ollamaChat(entry, systemPrompt(mode), stateJson(state, cfg, mode, hints), signal);
+    const format = z.toJSONSchema(moveSchemaFor(state.dir));
+    const body = await ollamaChat(entry, systemPrompt(mode), stateJson(state, cfg, mode, hints), format, signal);
     const tResponseComplete = now();
-    const raw = body.message?.content ?? '';
+    // Empty content is almost always a token budget eaten by an unstoppable <think>; say so in the record.
+    const raw = body.message?.content || (body.done_reason ? `<no answer: done_reason=${body.done_reason}>` : '');
     const firstTokenNs = (body.load_duration ?? 0) + (body.prompt_eval_duration ?? 0);
     return {
       move: parseMove(safeJson(raw)),
