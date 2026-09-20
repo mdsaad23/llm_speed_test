@@ -187,3 +187,156 @@ function safeJson(text: string): unknown {
     return null;
   }
 }
+
+export interface ProviderSpec {
+  label: string;
+  /** OpenAI-compatible base: `${base}/models` lists the catalog, `${base}/chat/completions` plays. */
+  base: string;
+  /** Public catalogs can be browsed before a key exists. */
+  keylessList?: boolean;
+  /** Google lists ids as "models/gemini-x"; chat wants the bare name. */
+  strip?: string;
+  /** Anthropic lists with its own header pair; everyone else takes a bearer token. */
+  listHeaders?: (key: string) => Record<string, string>;
+}
+
+/**
+ * Bring-your-own-key providers. No model list is written down here: every catalog is fetched
+ * from the provider itself on request. Endpoints and auth styles probed against the live APIs.
+ */
+export const PROVIDERS = {
+  openai: { label: 'OpenAI', base: 'https://api.openai.com/v1' },
+  anthropic: {
+    label: 'Anthropic',
+    base: 'https://api.anthropic.com/v1',
+    listHeaders: (key) => ({ 'x-api-key': key, 'anthropic-version': '2023-06-01' }),
+  },
+  google: {
+    label: 'Google Gemini',
+    base: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    strip: 'models/',
+  },
+  xai: { label: 'xAI Grok', base: 'https://api.x.ai/v1' },
+  groq: { label: 'Groq', base: 'https://api.groq.com/openai/v1' },
+  together: { label: 'Together AI', base: 'https://api.together.xyz/v1' },
+  mistral: { label: 'Mistral', base: 'https://api.mistral.ai/v1' },
+  deepseek: { label: 'DeepSeek', base: 'https://api.deepseek.com/v1' },
+  openrouter: { label: 'OpenRouter', base: 'https://openrouter.ai/api/v1', keylessList: true },
+  vercel: { label: 'Vercel AI Gateway (Jev lives here)', base: 'https://ai-gateway.vercel.sh/v1', keylessList: true },
+} satisfies Record<string, ProviderSpec>;
+
+export type ProviderId = keyof typeof PROVIDERS;
+export const isProviderId = (id: string): id is ProviderId => id in PROVIDERS;
+
+/** A borrowed key never reaches a log line, an error banner or a results file. */
+const redact = (text: string, key: string) => (key ? text.replaceAll(key, '***') : text);
+
+export interface ListedModel { id: string; name: string }
+
+/** The provider's own catalog, live. Shapes differ: a bare array or {data}, id plus name or display_name. */
+export async function listModels(provider: ProviderId, key: string): Promise<ListedModel[]> {
+  const spec: ProviderSpec = PROVIDERS[provider];
+  const auth = spec.listHeaders?.(key) ?? (key ? { authorization: `Bearer ${key}` } : {});
+  const res = await fetch(`${spec.base}/models`, {
+    headers: { accept: 'application/json', ...auth },
+    signal: AbortSignal.timeout(20_000),
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`${provider} ${res.status}: ${redact(text, key).slice(0, 300)}`);
+  const json: unknown = JSON.parse(text);
+  const raw = Array.isArray(json) ? json : ((json as { data?: unknown[] }).data ?? []);
+  return (raw as { id?: string; name?: string; display_name?: string }[])
+    .filter((m) => typeof m.id === 'string')
+    .map((m) => ({
+      id: spec.strip && m.id!.startsWith(spec.strip) ? m.id!.slice(spec.strip.length) : m.id!,
+      name: m.name ?? m.display_name ?? '',
+    }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+interface ChatResponse {
+  choices?: { message?: { content?: string } }[];
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+    completion_tokens_details?: { reasoning_tokens?: number };
+  };
+}
+
+/**
+ * One chat call, in two shapes. The retry drops every optional knob a provider might reject —
+ * json_schema, temperature, max_tokens — which is how one adapter covers ten APIs.
+ * ponytail: retry-on-400 instead of a per-provider capability table; write the table if a
+ * provider starts answering 400 for some other reason and this hides it.
+ */
+async function chatCompletion(
+  spec: ProviderSpec,
+  entry: ModelEntry,
+  key: string,
+  messages: { role: string; content: string }[],
+  schema: object,
+  signal: AbortSignal,
+): Promise<ChatResponse> {
+  const call = (extra: object) =>
+    fetch(`${spec.base}/chat/completions`, {
+      method: 'POST',
+      signal,
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+      body: JSON.stringify({ model: entry.route, messages, ...extra }),
+    });
+
+  let res = await call({
+    temperature: 0,
+    max_tokens: entry.maxTokens,
+    response_format: { type: 'json_schema', json_schema: { name: 'move', strict: true, schema } },
+  });
+  if (res.status === 400) res = await call({ max_completion_tokens: entry.maxTokens });
+
+  const text = await res.text();
+  if (!res.ok) throw new Error(`${entry.id} ${res.status}: ${redact(text, key).slice(0, 300)}`);
+  return JSON.parse(text) as ChatResponse;
+}
+
+/** A model that ignored response_format still answers JSON — sometimes wrapped in prose or fences. */
+const looseJson = (text: string): unknown =>
+  safeJson(text) ?? safeJson(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1));
+
+/** Any OpenAI-compatible provider, played on a key the caller supplied. */
+export const openaiCompatAdapter = (entry: ModelEntry, key: string): Adapter => ({
+  id: entry.id,
+  paid: false, // the caller's own key is billed, so the server budget guard has nothing to charge
+  streams: false,
+  async decide({ state, cfg, mode, hints, signal }: DecideContext): Promise<Decision> {
+    const spec: ProviderSpec = PROVIDERS[entry.provider as ProviderId];
+    // $schema is not part of an OpenAI json_schema object, and strict mode rejects the extra key.
+    const schema: Record<string, unknown> = { ...z.toJSONSchema(moveSchemaFor(state.dir)), additionalProperties: false };
+    delete schema.$schema;
+    const tRequestSent = now();
+    const body = await chatCompletion(
+      spec,
+      entry,
+      key,
+      [
+        { role: 'system', content: systemPrompt(mode) },
+        { role: 'user', content: stateJson(state, cfg, mode, hints) },
+      ],
+      schema,
+      signal,
+    );
+    const tResponseComplete = now();
+    const raw = body.choices?.[0]?.message?.content ?? '';
+    const u = body.usage ?? {};
+    return {
+      move: parseMove(looseJson(raw)),
+      timing: { tRequestSent, tFirstToken: null, tResponseComplete },
+      usage: toUsage({
+        inputTokens: u.prompt_tokens,
+        outputTokens: u.completion_tokens,
+        totalTokens: u.total_tokens,
+        outputTokenDetails: { reasoningTokens: u.completion_tokens_details?.reasoning_tokens },
+      }),
+      raw,
+    };
+  },
+});

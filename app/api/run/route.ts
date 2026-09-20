@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { createGame, defaultConfig, type Config, type State } from '@/lib/game/engine';
-import { createAdapter, findModel } from '@/lib/decide/models.config';
+import { byokEntry, createAdapter, findModel, type ModelEntry } from '@/lib/decide/models.config';
+import { PROVIDERS, isProviderId } from '@/lib/decide/providers';
 import { writeResults } from '@/lib/metrics/results';
 import { newBudget, runGame, type RunEvent } from '@/lib/runner/run';
 
@@ -8,6 +9,9 @@ export const runtime = 'nodejs';
 
 const body = z.object({
   model: z.string(),
+  /** Set together: the caller's own provider and key, which never leave this request. */
+  provider: z.string().optional(),
+  apiKey: z.string().optional(),
   mode: z.enum(['deadline', 'turn', 'freerun']),
   hints: z.boolean(),
   try: z.int().min(1).max(20),
@@ -41,14 +45,20 @@ export async function POST(req: Request) {
   if (!parsed.success) return Response.json({ error: z.prettifyError(parsed.error) }, { status: 400 });
   const opts = parsed.data;
 
-  let entry;
-  try {
-    entry = findModel(opts.model);
-  } catch (e) {
-    return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 400 });
+  let entry: ModelEntry;
+  if (opts.provider) {
+    if (!isProviderId(opts.provider)) return Response.json({ error: `unknown provider "${opts.provider}"` }, { status: 400 });
+    if (!opts.apiKey) return Response.json({ error: `${PROVIDERS[opts.provider].label} needs an API key` }, { status: 400 });
+    entry = byokEntry(opts.provider, opts.model);
+  } else {
+    try {
+      entry = findModel(opts.model);
+    } catch (e) {
+      return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 400 });
+    }
+    // Models billed to the server's own key stay on the CLI, where the typed confirmation lives.
+    if (entry.paid) return Response.json({ error: `"${entry.id}" is paid: run it with pnpm bench` }, { status: 400 });
   }
-  // Paid models stay on the CLI, where the worst-case estimate and the typed confirmation live.
-  if (entry.paid) return Response.json({ error: `"${entry.id}" is paid: run it with pnpm bench` }, { status: 400 });
 
   const cfg = defaultConfig(opts.cfg);
   const meta = {
@@ -65,7 +75,7 @@ export async function POST(req: Request) {
     manual_params: opts.manual ? { ...opts.cfg, displayMinTickMs: opts.displayMinTickMs } : undefined,
   };
 
-  const adapter = createAdapter(entry, cfg.seed);
+  const adapter = createAdapter(entry, cfg.seed, opts.apiKey);
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {

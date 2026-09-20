@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createGame, defaultConfig } from '@/lib/game/engine';
-import { ollamaAdapter } from '@/lib/decide/providers';
+import { ollamaAdapter, openaiCompatAdapter } from '@/lib/decide/providers';
 import type { ModelEntry } from '@/lib/decide/models.config';
 
 const entry = {
@@ -53,5 +53,72 @@ describe('ollama adapter', () => {
       signal: new AbortController().signal,
     });
     expect(decision.move).toBeNull();
+  });
+});
+
+const byok = {
+  id: 'openrouter:acme/model-1', route: 'acme/model-1', provider: 'openrouter',
+  reasoning: 'provider default', timeoutMs: 5000, maxTokens: 64, enabled: true, paid: false,
+} as ModelEntry;
+
+const chat = (content: string) => ({
+  choices: [{ message: { content } }],
+  usage: { prompt_tokens: 200, completion_tokens: 6, completion_tokens_details: { reasoning_tokens: 2 } },
+});
+
+/** Replays the given HTTP statuses in order, recording every request that was sent. */
+const stubChat = (replies: { status: number; body: unknown }[]) => {
+  const sent: { url: string; body: any }[] = [];
+  vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
+    sent.push({ url: String(url), body: JSON.parse(String(init.body)) });
+    const reply = replies[Math.min(sent.length - 1, replies.length - 1)];
+    return new Response(JSON.stringify(reply.body), { status: reply.status });
+  });
+  return sent;
+};
+
+describe('openai-compatible adapter', () => {
+  const play = (key = 'sk-secret') => {
+    const cfg = defaultConfig({ w: 10, h: 10 });
+    return openaiCompatAdapter(byok, key).decide({
+      state: createGame(cfg), cfg, mode: 'deadline', hints: false,
+      signal: new AbortController().signal,
+    });
+  };
+
+  it('asks the provider for a strict move schema and reports the reasoning tokens it spent', async () => {
+    const sent = stubChat([{ status: 200, body: chat('{"move":"UP"}') }]);
+    const decision = await play();
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].url).toBe('https://openrouter.ai/api/v1/chat/completions');
+    expect(sent[0].body.temperature).toBe(0);
+    expect(sent[0].body.max_tokens).toBe(64);
+    expect(sent[0].body.response_format.json_schema.strict).toBe(true);
+    expect(sent[0].body.response_format.json_schema.schema.$schema).toBeUndefined();
+    expect(sent[0].body.response_format.json_schema.schema.properties.move.enum).toEqual(['UP', 'DOWN', 'RIGHT']);
+    expect(decision.move).toBe('UP');
+    expect(decision.usage).toMatchObject({ input: 200, output: 6, reasoning: 2, total: 206 });
+  });
+
+  it('retries once without the optional knobs when a provider rejects them', async () => {
+    const sent = stubChat([
+      { status: 400, body: { error: { message: "Unsupported parameter: 'max_tokens'" } } },
+      { status: 200, body: chat('here you go:\n```json\n{"move":"DOWN"}\n```') },
+    ]);
+    const decision = await play();
+
+    expect(sent).toHaveLength(2);
+    expect(sent[1].body.response_format).toBeUndefined();
+    expect(sent[1].body.temperature).toBeUndefined();
+    expect(sent[1].body.max_completion_tokens).toBe(64);
+    // Fenced prose still carries a usable answer.
+    expect(decision.move).toBe('DOWN');
+  });
+
+  it('never repeats the caller key back in an error', async () => {
+    stubChat([{ status: 401, body: { error: { message: 'bad key sk-secret' } } }]);
+    await expect(play()).rejects.toThrow(/\*\*\*/);
+    await expect(play()).rejects.not.toThrow(/sk-secret/);
   });
 });

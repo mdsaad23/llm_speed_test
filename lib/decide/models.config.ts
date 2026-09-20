@@ -1,12 +1,12 @@
 import { greedyAdapter, mockAdapter, randomAdapter, type Adapter, type MockOptions } from '@/lib/decide/adapters';
-import { gatewayAdapter, jevAdapter, ollamaAdapter } from '@/lib/decide/providers';
+import { gatewayAdapter, jevAdapter, ollamaAdapter, openaiCompatAdapter, type ProviderId } from '@/lib/decide/providers';
 
 export interface ModelEntry {
   /** What you type on the CLI. */
   id: string;
   /** What is actually called: a Gateway model id, an Ollama tag, or a built-in name. */
   route: string;
-  provider: 'mock' | 'baseline' | 'gateway' | 'jev' | 'ollama';
+  provider: 'mock' | 'baseline' | 'gateway' | 'jev' | 'ollama' | ProviderId;
   /** Requested reasoning setting. Never silently changed — a refusal is logged per model. */
   reasoning: string;
   timeoutMs: number;
@@ -89,7 +89,24 @@ export const findModel = (id: string): ModelEntry => {
   return entry;
 };
 
-export function createAdapter(entry: ModelEntry, seed: number): Adapter {
+/**
+ * A model the caller brought with their own key: it never appears in MODELS, so nothing here
+ * has to be edited to play one. Their provider bills them, which is why it is not `paid` —
+ * pricing.json and the budget guard only govern keys that live on the server.
+ */
+export const byokEntry = (provider: ProviderId, route: string): ModelEntry => ({
+  id: `${provider}:${route}`,
+  route,
+  provider,
+  reasoning: 'provider default',
+  timeoutMs: 30_000,
+  // Higher than the local models get: a reasoning model spends tokens before the JSON appears.
+  maxTokens: 512,
+  enabled: true,
+  paid: false,
+});
+
+export function createAdapter(entry: ModelEntry, seed: number, apiKey = ''): Adapter {
   switch (entry.provider) {
     case 'baseline':
       return entry.route === 'baseline:random' ? randomAdapter(seed) : greedyAdapter();
@@ -101,5 +118,7 @@ export function createAdapter(entry: ModelEntry, seed: number): Adapter {
       return jevAdapter(entry);
     case 'ollama':
       return ollamaAdapter(entry);
+    default:
+      return openaiCompatAdapter(entry, apiKey);
   }
 }

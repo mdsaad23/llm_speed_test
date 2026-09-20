@@ -9,6 +9,18 @@ import type { Replay } from '@/lib/runner/run';
 import type { UiEvent } from './api/run/route';
 
 interface FreeModel { id: string; note: string | null }
+interface ProviderOption { id: string; label: string; keylessList: boolean }
+interface Catalog { local: FreeModel[]; providers: ProviderOption[] }
+interface ListedModel { id: string; name: string }
+
+const EMPTY_CATALOG: Catalog = { local: [], providers: [] };
+
+/** "openrouter:openai/gpt-5" names the provider that bills it; a local id like "ollama:llama3" does not. */
+const splitModel = (id: string, providers: ProviderOption[]) => {
+  const at = id.indexOf(':');
+  const provider = at < 0 ? '' : id.slice(0, at);
+  return providers.some((p) => p.id === provider) ? { provider, route: id.slice(at + 1) } : null;
+};
 
 const SEEDS = [101, 102, 103];
 const MODES = ['deadline', 'turn', 'freerun'] as const;
@@ -39,9 +51,12 @@ const isOfficial = (f: Form, seed: number) => {
   return same && SEEDS.includes(seed) && f.mode !== 'freerun' && !f.hints;
 };
 
-function problems(f: Form): string[] {
+function problems(f: Form, providers: ProviderOption[], keys: Record<string, string>): string[] {
   const out: string[] = [];
   if (f.models.length === 0) out.push('pick at least one model');
+  const unkeyed = [...new Set(f.models.map((m) => splitModel(m, providers)?.provider).filter(Boolean))]
+    .filter((id) => !keys[id as string]?.trim());
+  if (unkeyed.length > 0) out.push(`paste an API key for: ${unkeyed.join(', ')}`);
   if (f.w < 5 || f.h < 5) out.push('grid must be at least 5x5');
   if (f.minDeadlineMs > f.baseDeadlineMs) out.push('min deadline cannot exceed base deadline');
   if (f.level === 2 && f.obstacleCount > Math.floor((f.w * f.h) / 6)) out.push('too many obstacles for this grid');
@@ -53,7 +68,9 @@ function problems(f: Form): string[] {
 
 export default function Page() {
   const [form, setForm] = useState<Form>(DEFAULTS);
-  const [available, setAvailable] = useState<FreeModel[]>([]);
+  const [catalog, setCatalog] = useState<Catalog>(EMPTY_CATALOG);
+  // Keys stay in this tab: they ride one request per run and are never persisted.
+  const [keys, setKeys] = useState<Record<string, string>>({});
   const [view, setView] = useState<'live' | 'replay'>('live');
   const [confirming, setConfirming] = useState(false);
   const [running, setRunning] = useState(false);
@@ -72,12 +89,13 @@ export default function Page() {
   const abort = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    fetch('/api/models').then((r) => r.json()).then(setAvailable).catch(() => setAvailable([]));
+    fetch('/api/models').then((r) => r.json()).then(setCatalog).catch(() => setCatalog(EMPTY_CATALOG));
   }, []);
 
   const set = <K extends keyof Form>(k: K, v: Form[K]) => setForm((f) => ({ ...f, [k]: v }));
-  const errors = problems(form);
-  const spend = 0; // free models only, priced at zero by definition
+  const errors = problems(form, catalog.providers, keys);
+  const byok = form.models.filter((m) => splitModel(m, catalog.providers));
+  const spend = 0; // the server bills nothing: free models are zero, borrowed keys are the caller's
   const sessionSpend = runs.reduce((a, r) => a + r.cost_usd, 0);
   const tick = useTick(!!pending);
   const elapsed = pending ? Math.max(0, tick - pending.at) : 0;
@@ -119,12 +137,15 @@ export default function Page() {
     const seed = isOfficial(form, SEEDS[(t - 1) % SEEDS.length]) ? SEEDS[(t - 1) % SEEDS.length] : form.seed;
     const { mode, hints, displayMinTickMs, maxUsdPerRun } = form;
     const cfgBody = { ...defaultConfig(form), seed };
+    const own = splitModel(model, catalog.providers);
     const res = await fetch('/api/run', {
       method: 'POST',
       signal,
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        model, mode, hints, displayMinTickMs, maxUsdPerRun,
+        model: own ? own.route : model,
+        ...(own ? { provider: own.provider, apiKey: keys[own.provider] ?? '' } : {}),
+        mode, hints, displayMinTickMs, maxUsdPerRun,
         try: t,
         manual: !isOfficial(form, seed),
         cfg: {
@@ -203,7 +224,10 @@ export default function Page() {
             <p>{form.mode} · level {form.level} · {form.w}x{form.h} · up to {form.maxGameSeconds}s per game</p>
             <p className="mt-1 max-h-24 overflow-auto break-all text-beige">{form.models.join(', ')}</p>
             <p className="mt-2">
-              Worst case spend: <span className="text-mustard">${spend.toFixed(4)}</span> — free model, no API calls are billed.
+              Worst case spend here: <span className="text-mustard">${spend.toFixed(4)}</span> —{' '}
+              {byok.length > 0
+                ? `${byok.length} of these are billed by your own provider on your own key, not by this app.`
+                : 'free models, no API calls are billed.'}
             </p>
             <p className="mt-1 text-beige">
               {isOfficial(form, SEEDS[0]) ? 'Official settings: counts towards summary.csv.' : 'Manual settings: excluded from summary.csv.'}
@@ -303,7 +327,8 @@ export default function Page() {
             <Feed decisions={decisions} pending={pending} />
             <Leaderboard runs={runs} />
             <PromptPanel form={form} />
-            <Manual form={form} set={set} errors={errors} disabled={running} available={available} />
+            <Manual form={form} set={set} errors={errors} disabled={running} catalog={catalog} keys={keys}
+              setKey={(id, v) => setKeys((k) => ({ ...k, [id]: v }))} />
           </div>
         </div>
       )}
@@ -313,7 +338,11 @@ export default function Page() {
 
 const HELP: Record<string, string> = {
   models:
-    'Every free model the server offers. Each checked model plays the whole queue (tries × games) one at a time — a local GPU has no parallelism to give. Paid models stay on the CLI.',
+    'Each checked model plays the whole queue (tries × games) one at a time — a local GPU has no parallelism to give. Models from different providers can be checked together; they run one after another.',
+  provider:
+    'Where the model runs. "this machine" is the free list the server offers. Pick a provider to browse its catalogue: that list is fetched live from the provider itself on every load, never a copy kept in this app.',
+  apiKey:
+    'Your own key. It reaches this app only to list models and play the games, is never written to results, replays or logs, and is forgotten when the tab closes. The provider bills you directly, so the $/run guard below does not apply to it.',
   mode:
     'How the clock treats thinking time. deadline: the board is frozen, but an answer later than the deadline is thrown away and the snake goes straight. turn: frozen and waits forever, so latency never kills you. freerun: the snake keeps moving while the model thinks — demo only, not comparable.',
   w: 'Board width in cells. Official runs are 20x20; changing it marks the run manual.',
@@ -359,30 +388,87 @@ function Num({ label, help, value, onChange, step = 1 }: {
   );
 }
 
-function Manual({ form, set, errors, disabled, available }: {
+function Manual({ form, set, errors, disabled, catalog, keys, setKey }: {
   form: Form;
   set: <K extends keyof Form>(k: K, v: Form[K]) => void;
   errors: string[];
   disabled: boolean;
-  available: FreeModel[];
+  catalog: Catalog;
+  keys: Record<string, string>;
+  setKey: (provider: string, key: string) => void;
 }) {
+  const [browsing, setBrowsing] = useState('');
+  const [remote, setRemote] = useState<ListedModel[]>([]);
+  const [note, setNote] = useState('');
+  const [filter, setFilter] = useState('');
+  const provider = catalog.providers.find((p) => p.id === browsing);
+  const key = keys[browsing] ?? '';
+
+  const load = async (id: string, withKey: string) => {
+    setNote('loading…');
+    setRemote([]);
+    try {
+      const res = await fetch(`/api/models?provider=${id}`, { headers: { 'x-provider-key': withKey } });
+      const json = await res.json();
+      if (!res.ok) return setNote((json as { error?: string }).error ?? `HTTP ${res.status}`);
+      setRemote(json as ListedModel[]);
+      setNote(`${(json as ListedModel[]).length} models, live from ${id}`);
+    } catch (e) {
+      setNote(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  // A public catalogue loads itself; a keyed one waits until there is a key to send.
+  useEffect(() => {
+    setRemote([]);
+    setFilter('');
+    setNote('');
+    if (catalog.providers.find((p) => p.id === browsing)?.keylessList) void load(browsing, '');
+  }, [browsing, catalog.providers]);
+
+  const rows: FreeModel[] = browsing
+    ? remote.map((m) => ({ id: `${browsing}:${m.id}`, note: m.name || null }))
+    : catalog.local;
+  const shown = filter ? rows.filter((r) => r.id.toLowerCase().includes(filter.toLowerCase())) : rows;
   const toggle = (id: string) =>
     set('models', form.models.includes(id) ? form.models.filter((m) => m !== id) : [...form.models, id]);
-  const pick = (test: (id: string) => boolean) => set('models', available.filter((m) => test(m.id)).map((m) => m.id));
 
   return (
     <details className="border border-line p-2 text-xs" open>
       <summary className="text-mustard">Manual mode</summary>
       <fieldset disabled={disabled} className="mt-2">
         <div className="mb-1 flex flex-wrap items-center gap-2">
-          <span className="flex items-center gap-1 text-beige">models ({form.models.length}/{available.length}) <Help k="models" /></span>
-          <button className="border border-line px-2" onClick={() => pick(() => true)}>all</button>
-          <button className="border border-line px-2" onClick={() => pick((id) => id.startsWith('ollama:'))}>ollama</button>
+          <span className="flex items-center gap-1 text-beige">provider <Help k="provider" /></span>
+          <select value={browsing} onChange={(e) => setBrowsing(e.target.value)} className="w-56">
+            <option value="">this machine — free models</option>
+            {catalog.providers.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+          </select>
+          {provider && (
+            <>
+              <input type="password" autoComplete="off" className="w-52" value={key}
+                placeholder={`${provider.label} API key`} onChange={(e) => setKey(browsing, e.target.value)} />
+              <button className="border border-line px-2" onClick={() => void load(browsing, key)}>load models</button>
+              <Help k="apiKey" />
+            </>
+          )}
+          {note && <span className="min-w-0 break-all text-beige">{note}</span>}
+        </div>
+        <div className="mb-1 flex flex-wrap items-center gap-2">
+          <span className="flex items-center gap-1 text-beige">models ({form.models.length} picked) <Help k="models" /></span>
+          <input className="w-40" placeholder="filter" value={filter} onChange={(e) => setFilter(e.target.value)} />
+          <button className="border border-line px-2"
+            onClick={() => set('models', [...new Set([...form.models, ...shown.map((m) => m.id)])])}>
+            add all {shown.length}
+          </button>
           <button className="border border-line px-2" onClick={() => set('models', [])}>none</button>
         </div>
         <div className="mb-2 max-h-44 overflow-y-auto border border-line p-1">
-          {available.length === 0 && <span className="text-beige">no free models</span>}
-          {available.map((m) => (
+          {shown.length === 0 && (
+            <span className="text-beige">
+              {browsing ? 'nothing listed yet — paste a key and press load models' : 'no free models'}
+            </span>
+          )}
+          {shown.map((m) => (
             <label key={m.id} className="flex items-start gap-2 py-0.5">
               <input type="checkbox" className="mt-0.5 shrink-0" checked={form.models.includes(m.id)} onChange={() => toggle(m.id)} />
               <span className="min-w-0 break-all">
@@ -392,6 +478,13 @@ function Manual({ form, set, errors, disabled, available }: {
             </label>
           ))}
         </div>
+        {form.models.length > 0 && (
+          <div className="mb-2 flex flex-wrap gap-1">
+            {form.models.map((m) => (
+              <button key={m} className="border border-line px-1 text-beige" onClick={() => toggle(m)}>{m} ✕</button>
+            ))}
+          </div>
+        )}
       </fieldset>
       <fieldset disabled={disabled} className="mt-2 grid grid-cols-2 gap-x-6 gap-y-1">
         <label className="flex items-center justify-between gap-2">
@@ -439,8 +532,8 @@ function Manual({ form, set, errors, disabled, available }: {
         </ul>
       )}
       <p className="mt-2 text-beige">
-        Worst-case spend for this configuration: $0.0000 — the browser can only run free models. Reasoning and max_tokens
-        live in models.config.ts, where paid runs read them.
+        Free models cost nothing. A model reached with your own key is billed by that provider, not by this app, so the
+        $/run guard cannot stop it — the per-game caps above are what bound it. Keys never reach results or replays.
       </p>
     </details>
   );

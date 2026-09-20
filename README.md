@@ -43,12 +43,23 @@ Results land in `results/`:
 corepack pnpm dev      # http://localhost:3000
 ```
 
-The browser only runs free models: the mocks, the baselines and every local Ollama tag. It reads that list from
-`/api/models`, which serves the enabled, unpaid entries of `models.config.ts`. Paid models are CLI-only, where
-the estimate and confirmation live. `mock:slow` is the interesting one: it is slow and jittery enough to drive
-the board through timeouts, invalid replies and errors without spending anything.
+Out of the box the browser runs free models: the mocks, the baselines and every local Ollama tag. It reads that
+list from `/api/models`, which serves the enabled, unpaid entries of `models.config.ts`. Models billed to the
+server's own key stay CLI-only, where the estimate and confirmation live. `mock:slow` is the interesting one:
+it is slow and jittery enough to drive the board through timeouts, invalid replies and errors without spending
+anything.
 
-Tick the models you want in the manual panel (`all` / `ollama` / `none` select in bulk) and the browser plays
+The provider dropdown in the manual panel reaches everything else: OpenAI, Anthropic, Google, xAI, Groq,
+Together, Mistral, DeepSeek, OpenRouter and the Vercel AI Gateway (which is where Jev lives). Pick one, paste
+your own key, and `/api/models?provider=` proxies that provider's catalogue — fetched from the provider on
+every load, never a list copied into this repo. OpenRouter and the Gateway list without a key. One adapter
+(`openaiCompatAdapter`) plays them all over `/chat/completions`, and a provider that rejects the strict move
+schema gets one retry with the optional knobs dropped. Your key is sent to this app only for the listing and
+the run: it is never persisted, logged, or written to a result or replay. Those runs are billed by your
+provider, so the `$/run` guard — which only governs keys on the server — does not bound them; the per-game
+call and time caps do.
+
+Tick the models you want in the manual panel, from as many providers as you like, and the browser plays
 them one at a time, model × try, with the leaderboard filling up as they finish. One game at a time: a local
 GPU has no parallelism to give. Each Ollama run is warmed up before the clock starts — the header says
 `LOADING MODEL` while a cold 26B lands in VRAM — and the weights are released the moment the run ends, so the
