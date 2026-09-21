@@ -95,7 +95,6 @@ export default function Page() {
   const set = <K extends keyof Form>(k: K, v: Form[K]) => setForm((f) => ({ ...f, [k]: v }));
   const errors = problems(form, catalog.providers, keys);
   const byok = form.models.filter((m) => splitModel(m, catalog.providers));
-  const spend = 0; // the server bills nothing: free models are zero, borrowed keys are the caller's
   const sessionSpend = runs.reduce((a, r) => a + r.cost_usd, 0);
   const tick = useTick(!!pending);
   const elapsed = pending ? Math.max(0, tick - pending.at) : 0;
@@ -224,10 +223,15 @@ export default function Page() {
             <p>{form.mode} · level {form.level} · {form.w}x{form.h} · up to {form.maxGameSeconds}s per game</p>
             <p className="mt-1 max-h-24 overflow-auto break-all text-beige">{form.models.join(', ')}</p>
             <p className="mt-2">
-              Worst case spend here: <span className="text-mustard">${spend.toFixed(4)}</span> —{' '}
-              {byok.length > 0
-                ? `${byok.length} of these are billed by your own provider on your own key, not by this app.`
-                : 'free models, no API calls are billed.'}
+              {byok.length > 0 ? (
+                <>
+                  <span className="text-mustard">{byok.length} of these are billed by your own provider on your own key</span> —
+                  this app has no verified price for them, so it tracks $0 here and does not cap them. Check your
+                  provider's pricing before a large run; the per-game call and time caps are what actually bound them.
+                </>
+              ) : (
+                <>Worst case spend here: <span className="text-mustard">$0.0000</span> — free models, no API calls are billed.</>
+              )}
             </p>
             <p className="mt-1 text-beige">
               {isOfficial(form, SEEDS[0]) ? 'Official settings: counts towards summary.csv.' : 'Manual settings: excluded from summary.csv.'}

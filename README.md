@@ -45,11 +45,15 @@ Results land in `results/`:
 corepack pnpm dev      # http://localhost:3000
 ```
 
-Out of the box the browser runs free models: the mocks, the baselines and every local Ollama tag. It reads that
-list from `/api/models`, which serves the enabled, unpaid entries of `models.config.ts`. Models billed to the
-server's own key stay CLI-only, where the estimate and confirmation live. `mock:slow` is the interesting one:
-it is slow and jittery enough to drive the board through timeouts, invalid replies and errors without spending
-anything.
+Out of the box the browser runs free models: the mocks, the baselines, every local Ollama tag, and `laya` —
+the same typed-decision shape as Jev, but open-weight and CPU-local. It reads that list from `/api/models`,
+which serves the enabled, unpaid entries of `models.config.ts`. Models billed to the server's own key stay
+CLI-only, where the estimate and confirmation live. `mock:slow` is the interesting one: it is slow and jittery
+enough to drive the board through timeouts, invalid replies and errors without spending anything.
+
+Selecting `laya` in the manual panel spawns `scripts/laya_server.py` itself on first use (needs the one-time
+`py -3.12 -m pip install laya` from its docstring), the same "LOADING MODEL" moment as a cold Ollama tag, then
+leaves it resident — reloading it costs 7-10s, per its own docs, so it is not re-spawned per game.
 
 The provider dropdown in the manual panel reaches everything else: OpenAI, Anthropic, Google, xAI, Groq,
 Together, Mistral, DeepSeek, OpenRouter and the Vercel AI Gateway (which is where Jev lives). Pick one, paste

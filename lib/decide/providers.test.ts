@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createGame, defaultConfig } from '@/lib/game/engine';
-import { ollamaAdapter, openaiCompatAdapter } from '@/lib/decide/providers';
+import { layaAdapter, ollamaAdapter, openaiCompatAdapter } from '@/lib/decide/providers';
 import type { ModelEntry } from '@/lib/decide/models.config';
 
 const entry = {
@@ -54,6 +54,37 @@ describe('ollama adapter', () => {
       signal: new AbortController().signal,
     });
     expect(decision.move).toBeNull();
+  });
+});
+
+const layaEntry = {
+  id: 'laya', route: 'convaiinnovations/laya', provider: 'laya',
+  reasoning: 'none', timeoutMs: 5000, maxTokens: 16, enabled: true, paid: false,
+} as ModelEntry;
+
+describe('laya adapter', () => {
+  it('asks a single choice question over the legal moves and reads back choice + probabilities', async () => {
+    const sent = stubFetch({
+      answers: { move: { type: 'choice', choice: 'UP', probabilities: { UP: 0.7, DOWN: 0.2, RIGHT: 0.1 } } },
+      usage: { input_tokens: 90, output_tokens: 0 },
+    });
+    const cfg = defaultConfig({ w: 10, h: 10 });
+    const decision = await layaAdapter(layaEntry).decide({
+      state: createGame(cfg), cfg, mode: 'deadline', hints: false,
+      signal: new AbortController().signal,
+    });
+
+    // The snake starts facing RIGHT, so LEFT (the reversal) is never even offered.
+    expect(Object.keys(sent.request.questions.move.criteria)).toEqual(['UP', 'DOWN', 'RIGHT']);
+    expect(decision.move).toBe('UP');
+    expect(decision.confidence).toBe(0.7);
+    expect(decision.usage).toMatchObject({ input: 90, output: 0, estimated: false });
+  });
+
+  it('warmup resolves without spawning anything once the server is already up', async () => {
+    // Not stubFetch: that helper assumes a JSON body to record, but /health is a bare GET.
+    vi.stubGlobal('fetch', async () => new Response(null, { status: 200 }));
+    await expect(layaAdapter(layaEntry).warmup?.(defaultConfig({ w: 10, h: 10 }))).resolves.toBeUndefined();
   });
 });
 

@@ -1,4 +1,6 @@
 import { experimental_evaluate, generateObject } from 'ai';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { z } from 'zod';
 import { MOVE_MEANING, legalMoves, moveSchema, moveSchemaFor, stateJson, systemPrompt } from '@/lib/decide/prompt';
 import { now, type Adapter, type DecideContext, type Decision, type Usage } from '@/lib/decide/adapters';
@@ -97,6 +99,110 @@ export const jevAdapter = (entry: ModelEntry): Adapter => ({
       move: parseMove({ move: answer.choice }),
       timing: { tRequestSent, tFirstToken: null, tResponseComplete: now() },
       usage: toUsage(result.usage),
+      raw: JSON.stringify(answer),
+      confidence: answer.probabilities?.[answer.choice] ?? null,
+    };
+  },
+});
+
+const LAYA_HOST = () => process.env.LAYA_HOST ?? 'http://localhost:8420';
+
+/**
+ * A project venv wins if one was ever set up; otherwise the global install this repo documents
+ * (`py -3.12 -m pip install laya`). Never bare `python`/`py` with no version pin — on a machine
+ * with several Pythons on PATH that can silently land on one laya was never installed into.
+ */
+const layaCommand = (): [string, string[]] => {
+  if (process.env.LAYA_PYTHON) return [process.env.LAYA_PYTHON, []];
+  if (existsSync('.venv/Scripts/python.exe')) return ['.venv/Scripts/python.exe', []];
+  return process.platform === 'win32' ? ['py', ['-3.12']] : ['python3.12', []];
+};
+
+async function layaIsUp(): Promise<boolean> {
+  try {
+    await fetch(`${LAYA_HOST()}/health`, { signal: AbortSignal.timeout(500) });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+let layaProcess: ChildProcess | null = null;
+let layaReady: Promise<void> | null = null;
+
+/**
+ * Selecting Laya should just work, the way an already-running Ollama does — so the first
+ * warmup spawns `laya_server.py` itself instead of making the user remember a second terminal.
+ * Never re-spawned or killed after that: a cold checkpoint load costs 7-10s (Laya's own docs),
+ * so it stays resident for the rest of this Next.js process, across every game and model switch.
+ */
+async function ensureLayaRunning(): Promise<void> {
+  if (await layaIsUp()) return;
+  if (!layaReady) {
+    const port = new URL(LAYA_HOST()).port || '8420';
+    const [cmd, baseArgs] = layaCommand();
+    layaProcess = spawn(cmd, [...baseArgs, 'scripts/laya_server.py', '--port', port], { stdio: 'inherit' });
+    layaProcess.on('exit', (code) => {
+      if (code) console.warn(`[laya] server exited unexpectedly (code ${code})`);
+      layaProcess = null;
+      layaReady = null;
+    });
+    layaReady = (async () => {
+      const deadline = Date.now() + 120_000; // cold weight load, per its own README
+      while (Date.now() < deadline) {
+        if (await layaIsUp()) return;
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      throw new Error(
+        'laya server did not come up within 120s — run `python scripts/laya_server.py` by hand and check ' +
+          'the error (most likely: the venv from its docstring was never created, or `pip install laya` never ran)',
+      );
+    })();
+  }
+  await layaReady;
+}
+
+interface LayaResponse {
+  answers: { move: { choice: string; probabilities?: Record<string, number> } };
+  usage: { input_tokens?: number; output_tokens?: number };
+}
+
+/**
+ * Laya is the same typed-decision shape as Jev — one choice question, criteria, probabilities
+ * back — but open-weight and CPU-local: served by `scripts/laya_server.py`, not the gateway.
+ */
+export const layaAdapter = (entry: ModelEntry): Adapter => ({
+  id: entry.id,
+  paid: false,
+  streams: false,
+  async warmup() {
+    await ensureLayaRunning();
+  },
+  async decide({ state, cfg, mode, hints, signal }: DecideContext): Promise<Decision> {
+    const tRequestSent = now();
+    const response = await fetch(`${LAYA_HOST()}/predict`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      signal,
+      body: JSON.stringify({
+        state: JSON.parse(stateJson(state, cfg, mode, hints)),
+        questions: {
+          move: {
+            type: 'choice',
+            instructions: systemPrompt(mode),
+            criteria: Object.fromEntries(legalMoves(state.dir).map((d) => [d, MOVE_MEANING[d]])),
+          },
+        },
+      }),
+    });
+    const tResponseComplete = now();
+    if (!response.ok) throw new Error(`laya ${response.status}: ${await response.text()}`);
+    const body = (await response.json()) as LayaResponse;
+    const answer = body.answers.move;
+    return {
+      move: parseMove({ move: answer.choice }),
+      timing: { tRequestSent, tFirstToken: null, tResponseComplete },
+      usage: toUsage({ inputTokens: body.usage.input_tokens, outputTokens: body.usage.output_tokens }),
       raw: JSON.stringify(answer),
       confidence: answer.probabilities?.[answer.choice] ?? null,
     };

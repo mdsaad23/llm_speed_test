@@ -4,6 +4,9 @@ node_modules
 results
 *.tsbuildinfo
 
+# scripts/laya_server.py's local venv — a few hundred MB of torch, never committed
+.venv
+
 # local tool state, not part of the app
 .headroom
 .tokensave

@@ -1,12 +1,12 @@
 import { greedyAdapter, mockAdapter, randomAdapter, type Adapter, type MockOptions } from '@/lib/decide/adapters';
-import { gatewayAdapter, jevAdapter, ollamaAdapter, openaiCompatAdapter, type ProviderId } from '@/lib/decide/providers';
+import { gatewayAdapter, jevAdapter, layaAdapter, ollamaAdapter, openaiCompatAdapter, type ProviderId } from '@/lib/decide/providers';
 
 export interface ModelEntry {
   /** What you type on the CLI. */
   id: string;
   /** What is actually called: a Gateway model id, an Ollama tag, or a built-in name. */
   route: string;
-  provider: 'mock' | 'baseline' | 'gateway' | 'jev' | 'ollama' | ProviderId;
+  provider: 'mock' | 'baseline' | 'gateway' | 'jev' | 'laya' | 'ollama' | ProviderId;
   /** Requested reasoning setting. Never silently changed — a refusal is logged per model. */
   reasoning: string;
   timeoutMs: number;
@@ -94,6 +94,11 @@ export const MODELS: ModelEntry[] = [
     id: 'jev', route: 'typesafe-ai/jev', provider: 'jev',
     reasoning: 'none', timeoutMs: 30_000, maxTokens: 16, enabled: false, paid: true,
   },
+  {
+    id: 'laya', route: 'convaiinnovations/laya', provider: 'laya',
+    reasoning: 'none', timeoutMs: 30_000, maxTokens: 16, enabled: true, paid: false,
+    note: 'CPU-local, same typed-decision shape as jev. Its own server auto-starts on first warmup (needs the one-time `py -3.12 -m pip install laya` from scripts/laya_server.py\'s docstring) and stays resident.',
+  },
   ...OLLAMA,
 ];
 
@@ -131,6 +136,8 @@ export function createAdapter(entry: ModelEntry, seed: number, apiKey = ''): Ada
       return gatewayAdapter(entry);
     case 'jev':
       return jevAdapter(entry);
+    case 'laya':
+      return layaAdapter(entry);
     case 'ollama':
       return ollamaAdapter(entry);
     default:
