@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { defaultConfig } from '@/lib/game/engine';
-import { greedyAdapter, mockAdapter, now, sleep, type Adapter } from '@/lib/decide/adapters';
+import { defaultConfig, type Dir } from '@/lib/game/engine';
+import { freeDecision, greedyAdapter, mockAdapter, now, sleep, type Adapter } from '@/lib/decide/adapters';
 import { requirePrice } from '@/lib/decide/pricing';
 import { newBudget, runGame } from '@/lib/runner/run';
 import type { ModelEntry } from '@/lib/decide/models.config';
@@ -124,5 +124,63 @@ describe('budget guard', () => {
     const entry = { route: 'openai/not-in-pricing-json', paid: true } as ModelEntry;
     expect(() => requirePrice(entry)).toThrow(/no verified price/);
     expect(requirePrice({ route: 'google/gemini-3.8-flash', paid: true } as ModelEntry)?.input_per_1m_usd).toBe(0.75);
+  });
+});
+
+/** The failure the scoreboard catches and the per-move metrics miss: an answer that ignores the board. */
+const fixedAdapter = (move: Dir): Adapter => ({
+  id: `fixed:${move}`,
+  paid: false,
+  streams: false,
+  async decide() {
+    const t = now();
+    return freeDecision(move, t, move);
+  },
+});
+
+describe('degeneracy', () => {
+  it('flags a model that answers the same move whatever the board says', async () => {
+    const cfg = defaultConfig({ seed: 101, maxCallsPerGame: 300 });
+    const { run } = await runGame({
+      cfg, adapter: fixedAdapter('RIGHT'), mode: 'turn', hints: false, meta: meta('fixed'),
+    });
+    expect(run.distinct_moves).toBe(1);
+    expect(run.move_entropy).toBe(0);
+    expect(run.reference_kappa).toBeLessThanOrEqual(0.05);
+    expect(run.state_blind).toBe(true);
+    // The metric the flag exists to correct: going straight reads as "safe" right up to the wall.
+    expect(run.safe_move_rate!).toBeGreaterThan(0.8);
+  });
+
+  it('spares a model that plays the board', async () => {
+    const cfg = defaultConfig({ seed: 101, maxCallsPerGame: 40 });
+    const { run } = await runGame({
+      cfg, adapter: greedyAdapter(), mode: 'turn', hints: false, meta: meta('greedy'),
+    });
+    expect(run.reference_kappa).toBe(1);
+    expect(run.reference_agreement).toBe(1);
+    expect(run.state_blind).toBe(false);
+    expect(run.distinct_moves).toBeGreaterThan(1);
+  });
+});
+
+describe('baseline-normalized score', () => {
+  it('scores the reference policy at 1.0 on its own board', async () => {
+    const cfg = defaultConfig({ seed: 101, maxCallsPerGame: 60 });
+    const { run } = await runGame({
+      cfg, adapter: greedyAdapter(), mode: 'turn', hints: false, meta: meta('norm'),
+    });
+    expect(run.baseline_score).toBe(run.score);
+    expect(run.score_normalized).toBe(1);
+  });
+
+  it('puts a model that never eats at 0 against a baseline that does', async () => {
+    const cfg = defaultConfig({ seed: 101, maxCallsPerGame: 300 });
+    const { run } = await runGame({
+      cfg, adapter: fixedAdapter('RIGHT'), mode: 'turn', hints: false, meta: meta('norm-zero'),
+    });
+    expect(run.baseline_score!).toBeGreaterThan(0);
+    expect(run.score).toBe(0);
+    expect(run.score_normalized).toBe(0);
   });
 });

@@ -8,6 +8,8 @@ export interface DecisionRecord {
   score: number;
   deadline_ms: number | null;
   move: string | null;
+  /** What the greedy-BFS reference policy would have played on this same board. */
+  reference_move: string | null;
   latency_ms: number | null;
   timed_out: boolean;
   censored_at_ms: number | null;
@@ -82,6 +84,15 @@ export interface RunRecord extends RunMeta {
   error_rate: number;
   rejected_reversal: number;
 
+  baseline_score: number | null;
+  score_normalized: number | null;
+
+  distinct_moves: number;
+  move_entropy: number | null;
+  reference_agreement: number | null;
+  reference_kappa: number | null;
+  state_blind: boolean;
+
   deadline_at_death_ms: number | null;
   first_timeout_food: number | null;
   timeouts_by_food_bracket: Record<string, number>;
@@ -119,6 +130,8 @@ export function percentile(values: number[], p: number): number | null {
 export const mean = (v: number[]) => (v.length ? v.reduce((a, b) => a + b, 0) / v.length : null);
 export const median = (v: number[]) => percentile(v, 50);
 const sum = (v: number[]) => v.reduce((a, b) => a + b, 0);
+/** Keeps a null out of a mean instead of letting `?? 0` drag it down. */
+const isNumber = (v: number | null): v is number => v !== null && Number.isFinite(v);
 
 export interface Price {
   input_per_1m_usd: number;
@@ -145,6 +158,90 @@ export function deadlineBreakpoint(
   return null;
 }
 
+/** A move is only evidence about the board when a reference move exists to compare it against. */
+type MovePair = { move: string; reference: string };
+
+/**
+ * Shannon entropy of the emitted moves, normalised by log(4). Four, not the three offered on any
+ * one turn: which three those are depends on the heading, and the heading turns, so a game that
+ * plays the board uses all four compass moves. 0 is one move from start to finish.
+ */
+export function moveEntropy(moves: string[]): number | null {
+  if (!moves.length) return null;
+  const counts = new Map<string, number>();
+  for (const m of moves) counts.set(m, (counts.get(m) ?? 0) + 1);
+  let h = 0;
+  for (const n of counts.values()) {
+    const p = n / moves.length;
+    h -= p * Math.log(p);
+  }
+  return h / Math.log(4);
+}
+
+const share = (values: string[]) => {
+  const counts = new Map<string, number>();
+  for (const v of values) counts.set(v, (counts.get(v) ?? 0) + 1);
+  return new Map([...counts].map(([v, n]) => [v, n / values.length]));
+};
+
+/**
+ * How well the moves track the reference policy, raw and chance-corrected (Cohen's kappa).
+ *
+ * The correction is the point. Raw agreement flatters a model that answers the same literal move
+ * every turn — it collects every board where that move happened to be right and reads as skill.
+ * Kappa subtracts what the two marginals would agree on by coincidence, so a fixed answer scores
+ * ~0 however lucky it is, and only a move that moves *with* the board scores above it.
+ *
+ * `kappa` is null when chance already explains everything (both sides constant and equal): there
+ * is no room left to measure.
+ */
+export function referenceAgreement(pairs: MovePair[]): { observed: number | null; kappa: number | null } {
+  if (!pairs.length) return { observed: null, kappa: null };
+  const observed = pairs.filter((p) => p.move === p.reference).length / pairs.length;
+  const model = share(pairs.map((p) => p.move));
+  const reference = share(pairs.map((p) => p.reference));
+  let expected = 0;
+  for (const [m, p] of model) expected += p * (reference.get(m) ?? 0);
+  return { observed, kappa: expected >= 1 ? null : (observed - expected) / (1 - expected) };
+}
+
+/**
+ * Below this there is not enough play to tell a blind model from an unlucky one. Kept low on
+ * purpose: a model that answers one fixed move walks into the nearest wall in about ten moves on
+ * the official 20x20, so a higher bar would never fire on exactly the models this is for. The
+ * price is noise on a single run, which is what `state_blind_runs` in the summary is for — one
+ * flagged try is a look, three of three is the finding.
+ */
+const BLIND_MIN_DECISIONS = 8;
+/** Kappa this close to zero means the moves carry no more board information than chance. */
+const BLIND_MAX_KAPPA = 0.05;
+
+/**
+ * Screening flag, not a verdict: the moves carry no more information about the board than chance
+ * would give. It catches the model that answers one literal move all game and the one that picks
+ * at random alike, because operationally neither is reading anything.
+ *
+ * Two shapes, because a short game often never varies the right answer — a snake that dies in ten
+ * moves without eating leaves the food where it was, so the reference points the same way
+ * throughout:
+ *
+ * - the reference varied, so covariation is measurable and kappa decides on its own;
+ * - the reference never varied, so kappa is 0 for anything that is not a perfect match and cannot
+ *   separate a blind model from a bad one. Only a model that is itself stuck on a single move is
+ *   flagged — stuck on the *wrong* one, since matching the reference throughout leaves no kappa
+ *   at all. A model whose moves vary against a fixed right answer is playing badly, which is not
+ *   the same finding, and is left alone.
+ *
+ * Read it next to `move_entropy`: 0 is a stuck answer, high is a model reading a board it
+ * disagrees with. A model that plays for survival over greed will sit low on kappa without being
+ * blind, which is why this flags a run for a look rather than settling it.
+ */
+export function stateBlind(pairs: MovePair[], kappa: number | null): boolean {
+  if (pairs.length < BLIND_MIN_DECISIONS || kappa === null || kappa > BLIND_MAX_KAPPA) return false;
+  const referenceVaried = new Set(pairs.map((p) => p.reference)).size >= 2;
+  return referenceVaried || new Set(pairs.map((p) => p.move)).size === 1;
+}
+
 const CENSORED_ENDINGS: EndReason[] = ['time_limit', 'call_cap', 'budget_cap', 'aborted'];
 
 export function summarizeRun(
@@ -162,6 +259,7 @@ export function summarizeRun(
     foodTickCosts: number[];
     foodSecondCosts: number[];
     predictedBreakpointK: number | null;
+    baselineScore: number | null;
   },
 ): RunRecord {
   const latencies = decisions.filter((d) => d.status === 'ok' && d.latency_ms !== null).map((d) => d.latency_ms!);
@@ -175,6 +273,11 @@ export function summarizeRun(
   const safeFlags = decisions.filter((d) => d.safe !== null).map((d) => (d.safe ? 1 : 0));
   const approach = decisions.filter((d) => d.food_delta !== null).map((d) => (d.food_delta! < 0 ? 1 : 0));
   const confidences = decisions.filter((d) => d.confidence !== null).map((d) => d.confidence!);
+  const moves = decisions.filter((d) => d.move !== null).map((d) => d.move!);
+  const pairs: MovePair[] = decisions
+    .filter((d) => d.move !== null && d.reference_move !== null)
+    .map((d) => ({ move: d.move!, reference: d.reference_move! }));
+  const agreement = referenceAgreement(pairs);
 
   const calls = decisions.length;
   const rate = (n: number) => (calls ? n / calls : 0);
@@ -219,6 +322,16 @@ export function summarizeRun(
     error_rate: round(rate(decisions.filter((d) => d.status === 'error').length), 4)!,
     rejected_reversal: game.rejectedReversal,
 
+    baseline_score: game.baselineScore,
+    score_normalized:
+      game.baselineScore !== null && game.baselineScore > 0 ? round(game.score / game.baselineScore, 3) : null,
+
+    distinct_moves: new Set(moves).size,
+    move_entropy: round(moveEntropy(moves), 4),
+    reference_agreement: round(agreement.observed, 4),
+    reference_kappa: round(agreement.kappa, 4),
+    state_blind: stateBlind(pairs, agreement.kappa),
+
     deadline_at_death_ms: round(game.deadlineAtDeathMs, 2),
     first_timeout_food: timeouts.length ? timeouts[0].score : null,
     timeouts_by_food_bracket: brackets,
@@ -256,6 +369,8 @@ function round(v: number | null, places: number): number | null {
 const SUMMARY_COLUMNS = [
   'model', 'level', 'mode', 'tries',
   'best_score', 'mean_score', 'median_score', 'all_scores',
+  'mean_baseline_score', 'mean_score_normalized',
+  'move_entropy', 'reference_agreement', 'reference_kappa', 'state_blind_runs',
   'latency_p50_ms', 'latency_p95_ms', 'latency_p99_ms', 'timeout_rate',
   'cost_per_move_usd', 'cost_per_second_usd', 'cost_usd',
   'avg_time_to_food_s', 'safe_move_rate', 'path_efficiency',
@@ -281,6 +396,12 @@ export function summaryCsv(runs: RunRecord[]): string {
         case 'mean_score': return round(mean(scores), 3);
         case 'median_score': return median(scores);
         case 'all_scores': return scores.join(' ');
+        case 'mean_baseline_score': return round(mean(g.map((r) => r.baseline_score).filter(isNumber)), 3);
+        case 'mean_score_normalized': return round(mean(g.map((r) => r.score_normalized).filter(isNumber)), 3);
+        case 'move_entropy': return round(mean(g.map((r) => r.move_entropy).filter(isNumber)), 4);
+        case 'reference_agreement': return round(mean(g.map((r) => r.reference_agreement).filter(isNumber)), 4);
+        case 'reference_kappa': return round(mean(g.map((r) => r.reference_kappa).filter(isNumber)), 4);
+        case 'state_blind_runs': return g.filter((r) => r.state_blind).length;
         case 'censored_runs': return g.filter((r) => r.censored).length;
         case 'end_reasons': return [...new Set(g.map((r) => r.end_reason))].join(' ');
         default: return round(mean(g.map((r) => (r[k] as number | null) ?? 0).filter(Number.isFinite)), 6);

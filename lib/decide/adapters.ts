@@ -1,4 +1,5 @@
-import { DIRS, bfsDistance, nextCell, opposite, safeMoves, type Cell, type Config, type Dir, type State } from '@/lib/game/engine';
+import { DIRS, opposite, safeMoves, type Config, type Dir, type State } from '@/lib/game/engine';
+import { greedyMove } from '@/lib/game/policy';
 import type { ClockMode } from '@/lib/decide/prompt';
 
 export interface DecideContext {
@@ -80,47 +81,14 @@ export const randomAdapter = (seed = 1): Adapter => {
   };
 };
 
-/** Free cells reachable from a square — used to avoid walking into a pocket. */
-function openArea(s: State, cfg: Config, from: Cell): number {
-  const walls = new Set([...s.obstacles, ...s.snake.slice(0, -1)].map(([x, y]) => y * cfg.w + x));
-  const seen = new Set<number>([from[1] * cfg.w + from[0]]);
-  const queue: Cell[] = [from];
-  while (queue.length) {
-    const cur = queue.shift()!;
-    for (const d of DIRS) {
-      const n = nextCell(cur, d);
-      const id = n[1] * cfg.w + n[0];
-      if (n[0] < 0 || n[1] < 0 || n[0] >= cfg.w || n[1] >= cfg.h) continue;
-      if (walls.has(id) || seen.has(id)) continue;
-      seen.add(id);
-      queue.push(n);
-    }
-  }
-  return seen.size;
-}
-
 export const greedyAdapter = (): Adapter => ({
   id: 'baseline:greedy-bfs',
   paid: false,
   streams: false,
   async decide({ state, cfg }) {
     const t = now();
-    const safe = safeMoves(state, cfg);
-    if (!safe.length) return freeDecision(null, t, 'trapped');
-    const scored = safe.map((d) => {
-      const cell = nextCell(state.snake[0], d);
-      const toFood = state.food ? bfsDistance(state, cfg, cell, state.food) : null;
-      return { d, toFood, area: openArea(state, cfg, cell) };
-    });
-    scored.sort((a, b) => {
-      if (a.toFood !== b.toFood) {
-        if (a.toFood === null) return 1;
-        if (b.toFood === null) return -1;
-        return a.toFood - b.toFood;
-      }
-      return b.area - a.area;
-    });
-    return freeDecision(scored[0].d, t, scored[0].d);
+    const move = greedyMove(state, cfg);
+    return freeDecision(move, t, move ?? 'trapped');
   },
 });
 

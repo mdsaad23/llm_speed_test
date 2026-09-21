@@ -186,13 +186,16 @@ export function Chart({ decisions }: { decisions: DecisionRecord[] }) {
   return <canvas ref={ref} className="border border-line" aria-label="deadline versus latency" />;
 }
 
-type SortKey = 'score' | 'latency_p50_ms' | 'cost_usd' | 'timeout_rate';
+type SortKey = 'score' | 'score_normalized' | 'reference_kappa' | 'latency_p50_ms' | 'cost_usd' | 'timeout_rate';
+
+/** Columns where more is better, so the first click puts the winner on top. */
+const DESCENDING: SortKey[] = ['score', 'score_normalized', 'reference_kappa'];
 
 export function Leaderboard({ runs }: { runs: RunRecord[] }) {
   const [key, setKey] = useState<SortKey>('score');
   const sorted = [...runs].sort((a, b) => {
     const [x, y] = [a[key] ?? 0, b[key] ?? 0];
-    return key === 'score' ? Number(y) - Number(x) : Number(x) - Number(y);
+    return DESCENDING.includes(key) ? Number(y) - Number(x) : Number(x) - Number(y);
   });
   const head = (k: SortKey, label: string) => (
     <th className={`cursor-pointer text-right ${key === k ? 'text-mustard' : ''}`} onClick={() => setKey(k)}>
@@ -210,6 +213,8 @@ export function Leaderboard({ runs }: { runs: RunRecord[] }) {
             <th className="text-left">mode</th>
             <th className="text-right">try</th>
             {head('score', 'score')}
+            {head('score_normalized', 'vs bfs')}
+            {head('reference_kappa', 'kappa')}
             {head('latency_p50_ms', 'p50 ms')}
             {head('timeout_rate', 'timeouts')}
             {head('cost_usd', 'cost $')}
@@ -219,10 +224,18 @@ export function Leaderboard({ runs }: { runs: RunRecord[] }) {
         <tbody>
           {sorted.map((r) => (
             <tr key={r.run_id}>
-              <td>{r.model}</td>
+              <td>
+                {r.model}
+                {r.state_blind && (
+                  // Word, not a colour: the reader has to be able to see this in one glance.
+                  <span className="text-rust" title="moves carry no more board information than chance — check move_entropy and the raw replies"> ⚠ blind</span>
+                )}
+              </td>
               <td>{r.mode}</td>
               <td className="text-right">{r.try}</td>
               <td className="text-right">{r.score}</td>
+              <td className="text-right">{r.score_normalized === null ? '—' : r.score_normalized.toFixed(2)}</td>
+              <td className="text-right">{r.reference_kappa === null ? '—' : r.reference_kappa.toFixed(2)}</td>
               <td className="text-right">{fmt(r.latency_p50_ms)}</td>
               <td className="text-right">{r.timeout_rate.toFixed(2)}</td>
               <td className="text-right">{r.cost_usd.toFixed(5)}</td>

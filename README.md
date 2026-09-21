@@ -103,6 +103,19 @@ or 2, seeds 101/102/103, 8 s base deadline, hints off) is recorded with `manual:
   `call_duration` otherwise.
 - **Quality** — `safe_move_rate` (did the move avoid an immediate death), `food_approach_rate` (did BFS
   distance to the food go down), `path_efficiency` (shortest path ÷ ticks actually taken).
+- **Against the baseline** — `baseline_score` is what `baseline:greedy-bfs` scores on that exact board, and
+  `score_normalized` is the run's score over it. 1.0 is the reference policy's own result, so a score is
+  comparable across grids, levels and seeds in a way a raw count is not. The baseline is deterministic and
+  reads no clock, so the denominator never depends on how busy the machine was.
+- **Is it reading the board?** — `reference_move` on every decision is what greedy-BFS would have played on
+  that same board, which makes the model's move testable against something. `reference_agreement` is how
+  often they matched; `reference_kappa` is that agreement with chance subtracted out (Cohen's kappa), which
+  is the number to read. Raw agreement flatters a model that answers one literal move every turn — it
+  collects every board where that move happened to be right — while kappa puts it at ~0 however lucky the
+  move is. `move_entropy` (0 = one move all game, 1 = an even spread over all four compass moves) and
+  `distinct_moves` are the raw evidence next to it. `state_blind` is a screening flag, not a verdict: the
+  moves carry no more information about the board than chance would give. See the caveat below before
+  quoting it.
 - **Endings** — `end_reason` with `censored: true` means the game was cut short by a cap, the time limit or an
   abort. Those scores are lower bounds, not results.
 
@@ -122,11 +135,18 @@ Headline score is best of 3 tries; the mean, median and every individual try are
 - Local (Ollama) runs depend on your machine and what else it is doing. Set `SNAKEBENCH_GPU`,
   `SNAKEBENCH_OLLAMA_VERSION` and `SNAKEBENCH_QUANTIZATION` so the run records what it ran on.
 - Freerun is a demo. It is not comparable with the other two clocks.
+- `state_blind` flags a run for a look, it does not settle it. Greedy-BFS is myopic, so a model that plays
+  for survival over greed can sit low on kappa while reading the board perfectly well; read `move_entropy`
+  alongside it, since a stuck answer reads 0 there and a disagreeing model reads high. The threshold is
+  deliberately low on decisions (8), because a model that answers one fixed move walks into the nearest wall
+  in about ten moves and a higher bar would never fire on exactly the models it is for — the price is noise
+  on a single try, which is what `state_blind_runs` in `summary.csv` is for. One flagged try is a look;
+  three of three is the finding.
 
 ## Layout
 
 ```
-lib/game/     pure engine + tests (seeded, deterministic, no game library)
+lib/game/     pure engine + tests (seeded, deterministic, no game library), greedy-BFS reference policy
 lib/decide/   prompt and schema (one file), adapters, models.config.ts, pricing.json
 lib/metrics/  per-decision and per-game metrics, result files
 lib/runner/   the game loop, clocks, budget guard

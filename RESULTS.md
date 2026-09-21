@@ -35,6 +35,10 @@ with food position (0 of 30 calls did). Their safe-move rate above still reads 8
 bug: going straight is "safe" for the several ticks it takes to reach a wall, then it isn't. The scoreboard,
 not the per-move metric, is what actually catches this one.
 
+That check is no longer done by hand: every run now records `reference_kappa` (agreement with greedy-BFS,
+chance subtracted out) and flags this failure as `state_blind`. The table above predates the metric, so it
+does not carry the column — the next snapshot will.
+
 **Ran in circles without finding food.** `mistral-small-24b` didn't die in 2 of its 6 tries — it hit the
 300-call ceiling instead, after 222s and 230s of real wall-clock survival, having eaten nothing either time.
 Genuinely playing, just never converging on the food.

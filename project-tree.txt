@@ -27,8 +27,11 @@ SnakeBench
 |   |   \---providers.ts
 |   +---game
 |   |   +---engine.test.ts
-|   |   \---engine.ts
+|   |   +---engine.ts
+|   |   +---policy.test.ts
+|   |   \---policy.ts
 |   +---metrics
+|   |   +---metrics.test.ts
 |   |   +---metrics.ts
 |   |   \---results.ts
 |   \---runner

@@ -2,6 +2,7 @@ import {
   bfsDistance, createGame, deadlineAt, end, nextCell, safeMoves, speedCpsAt, step,
   type Cell, type Config, type Dir, type State,
 } from '@/lib/game/engine';
+import { baselineScore, greedyMove } from '@/lib/game/policy';
 import { promptVersion, type ClockMode } from '@/lib/decide/prompt';
 import { now, sleep, type Adapter, type Decision } from '@/lib/decide/adapters';
 import {
@@ -126,6 +127,9 @@ export async function runGame(opts: RunOptions): Promise<{ run: RunRecord; decis
   let foodStartMs = 0;
   if (state.food) foodPathLengths.push(bfsDistance(state, cfg, state.snake[0], state.food) ?? 0);
 
+  /** Deterministic and memoized, so asking for it per run costs nothing after the first board. */
+  const baseline = baselineScore(cfg);
+
   const started = now();
   let consecutiveErrors = 0;
   let deadlineAtDeathMs: number | null = null;
@@ -192,6 +196,8 @@ export async function runGame(opts: RunOptions): Promise<{ run: RunRecord; decis
       score: snapshot.score,
       deadline_ms: deadlineMs === null ? null : Math.round(deadlineMs),
       move: decision?.move ?? null,
+      // Computed after t1, so the reference policy's own BFS can never land inside a measured call.
+      reference_move: greedyMove(snapshot, cfg),
       latency_ms: latency === null ? null : round2(latency),
       timed_out: status === 'timeout',
       censored_at_ms: status === 'timeout' ? Math.round(limit ?? 0) : null,
@@ -233,6 +239,7 @@ export async function runGame(opts: RunOptions): Promise<{ run: RunRecord; decis
       foodTickCosts,
       foodSecondCosts,
       predictedBreakpointK: reference === null ? null : deadlineBreakpoint(cfg, reference),
+      baselineScore: baseline,
     });
   };
 

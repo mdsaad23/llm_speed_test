@@ -42,7 +42,8 @@ describe('ollama adapter', () => {
 
     expect(decision.move).toBe('UP');
     expect(decision.usage).toMatchObject({ input: 120, output: 4, estimated: false });
-    expect(decision.timing.tFirstToken! - decision.timing.tRequestSent).toBe(3);
+    // Not toBe: both marks are performance.now() floats, so (t + 3) - t is only 3 to within epsilon.
+    expect(decision.timing.tFirstToken! - decision.timing.tRequestSent).toBeCloseTo(3, 6);
   });
 
   it('treats unparseable content as an invalid answer rather than a crash', async () => {
