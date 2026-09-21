@@ -71,7 +71,7 @@ export const gatewayAdapter = (entry: ModelEntry): Adapter => ({
   },
 });
 
-/** TypeSafe AI's Jev is a typed-decision model: one choice question over the four moves. */
+/** TypeSafe AI's Jev is a typed-decision model: one choice question over the legal moves, reversal excluded. */
 export const jevAdapter = (entry: ModelEntry): Adapter => ({
   id: entry.id,
   paid: true,
@@ -227,6 +227,9 @@ export const PROVIDERS = {
 
 export type ProviderId = keyof typeof PROVIDERS;
 export const isProviderId = (id: string): id is ProviderId => id in PROVIDERS;
+
+/** A key saved locally in `.env.local`, e.g. OPENAI_API_KEY, so the UI field can stay blank. */
+export const envKey = (id: ProviderId): string => process.env[`${id.toUpperCase()}_API_KEY`] ?? '';
 
 /** A borrowed key never reaches a log line, an error banner or a results file. */
 const redact = (text: string, key: string) => (key ? text.replaceAll(key, '***') : text);

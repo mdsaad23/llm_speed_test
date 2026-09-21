@@ -1,5 +1,5 @@
 import { MODELS } from '@/lib/decide/models.config';
-import { PROVIDERS, isProviderId, listModels } from '@/lib/decide/providers';
+import { PROVIDERS, envKey, isProviderId, listModels, type ProviderId } from '@/lib/decide/providers';
 
 export const runtime = 'nodejs';
 
@@ -7,6 +7,7 @@ const PROVIDER_LIST = Object.entries(PROVIDERS).map(([id, p]) => ({
   id,
   label: p.label,
   keylessList: 'keylessList' in p,
+  hasEnvKey: !!envKey(id as ProviderId),
 }));
 
 /**
@@ -23,7 +24,7 @@ export async function GET(req: Request) {
   }
   if (!isProviderId(provider)) return Response.json({ error: `unknown provider "${provider}"` }, { status: 400 });
 
-  const key = req.headers.get('x-provider-key') ?? '';
+  const key = req.headers.get('x-provider-key') || envKey(provider);
   if (!key && !('keylessList' in PROVIDERS[provider])) {
     return Response.json({ error: `${PROVIDERS[provider].label} needs an API key to list its models` }, { status: 400 });
   }

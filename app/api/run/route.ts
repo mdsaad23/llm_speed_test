@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { createGame, defaultConfig, type Config, type State } from '@/lib/game/engine';
 import { byokEntry, createAdapter, findModel, type ModelEntry } from '@/lib/decide/models.config';
-import { PROVIDERS, isProviderId } from '@/lib/decide/providers';
+import { PROVIDERS, envKey, isProviderId } from '@/lib/decide/providers';
 import { writeResults } from '@/lib/metrics/results';
 import { newBudget, runGame, type RunEvent } from '@/lib/runner/run';
 
@@ -46,9 +46,11 @@ export async function POST(req: Request) {
   const opts = parsed.data;
 
   let entry: ModelEntry;
+  let apiKey = opts.apiKey ?? '';
   if (opts.provider) {
     if (!isProviderId(opts.provider)) return Response.json({ error: `unknown provider "${opts.provider}"` }, { status: 400 });
-    if (!opts.apiKey) return Response.json({ error: `${PROVIDERS[opts.provider].label} needs an API key` }, { status: 400 });
+    apiKey ||= envKey(opts.provider);
+    if (!apiKey) return Response.json({ error: `${PROVIDERS[opts.provider].label} needs an API key` }, { status: 400 });
     entry = byokEntry(opts.provider, opts.model);
   } else {
     try {
@@ -75,7 +77,7 @@ export async function POST(req: Request) {
     manual_params: opts.manual ? { ...opts.cfg, displayMinTickMs: opts.displayMinTickMs } : undefined,
   };
 
-  const adapter = createAdapter(entry, cfg.seed, opts.apiKey);
+  const adapter = createAdapter(entry, cfg.seed, apiKey);
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
