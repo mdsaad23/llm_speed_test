@@ -71,7 +71,7 @@ export const gatewayAdapter = (entry: ModelEntry): Adapter => ({
   },
 });
 
-/** TypeSafe AI's Jev is a typed-decision model: one choice question over the four moves. */
+/** TypeSafe AI's Jev is a typed-decision model: one choice question over the legal moves, reversal excluded. */
 export const jevAdapter = (entry: ModelEntry): Adapter => ({
   id: entry.id,
   paid: true,
