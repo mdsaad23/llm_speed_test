@@ -9,7 +9,7 @@ import type { Replay } from '@/lib/runner/run';
 import type { UiEvent } from './api/run/route';
 
 interface FreeModel { id: string; note: string | null }
-interface ProviderOption { id: string; label: string; keylessList: boolean }
+interface ProviderOption { id: string; label: string; keylessList: boolean; hasEnvKey: boolean }
 interface Catalog { local: FreeModel[]; providers: ProviderOption[] }
 interface ListedModel { id: string; name: string }
 
@@ -55,7 +55,7 @@ function problems(f: Form, providers: ProviderOption[], keys: Record<string, str
   const out: string[] = [];
   if (f.models.length === 0) out.push('pick at least one model');
   const unkeyed = [...new Set(f.models.map((m) => splitModel(m, providers)?.provider).filter(Boolean))]
-    .filter((id) => !keys[id as string]?.trim());
+    .filter((id) => !keys[id as string]?.trim() && !providers.find((p) => p.id === id)?.hasEnvKey);
   if (unkeyed.length > 0) out.push(`paste an API key for: ${unkeyed.join(', ')}`);
   if (f.w < 5 || f.h < 5) out.push('grid must be at least 5x5');
   if (f.minDeadlineMs > f.baseDeadlineMs) out.push('min deadline cannot exceed base deadline');
@@ -423,7 +423,8 @@ function Manual({ form, set, errors, disabled, catalog, keys, setKey }: {
     setRemote([]);
     setFilter('');
     setNote('');
-    if (catalog.providers.find((p) => p.id === browsing)?.keylessList) void load(browsing, '');
+    const found = catalog.providers.find((p) => p.id === browsing);
+    if (found?.keylessList || found?.hasEnvKey) void load(browsing, '');
   }, [browsing, catalog.providers]);
 
   const rows: FreeModel[] = browsing
@@ -446,7 +447,8 @@ function Manual({ form, set, errors, disabled, catalog, keys, setKey }: {
           {provider && (
             <>
               <input type="password" autoComplete="off" className="w-52" value={key}
-                placeholder={`${provider.label} API key`} onChange={(e) => setKey(browsing, e.target.value)} />
+                placeholder={provider.hasEnvKey ? 'using saved .env key' : `${provider.label} API key`}
+                onChange={(e) => setKey(browsing, e.target.value)} />
               <button className="border border-line px-2" onClick={() => void load(browsing, key)}>load models</button>
               <Help k="apiKey" />
             </>
