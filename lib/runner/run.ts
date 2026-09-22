@@ -1,6 +1,6 @@
 import {
   bfsDistance, createGame, deadlineAt, end, nextCell, safeMoves, speedCpsAt, step,
-  type Cell, type Config, type Dir, type State,
+  type Cell, type Config, type Dir, type EndReason, type State,
 } from '@/lib/game/engine';
 import { baselineScore, greedyMove } from '@/lib/game/policy';
 import { promptVersion, type ClockMode } from '@/lib/decide/prompt';
@@ -66,6 +66,8 @@ export interface Replay {
   obstacles: Cell[];
   frames: Frame[];
   decisions: DecisionRecord[];
+  /** Why the last frame is the last: a replay viewer shows it there, so a dead snake never reads as one still waiting. */
+  end_reason?: EndReason | null;
 }
 
 export type RunEvent =
@@ -307,7 +309,7 @@ export async function runGame(opts: RunOptions): Promise<{ run: RunRecord; decis
 
   const run = summary();
   opts.onEvent?.({ type: 'end', run });
-  return { run, decisions, replay: { run_id: meta.run_id, meta, config: cfg, obstacles, frames, decisions } };
+  return { run, decisions, replay: { run_id: meta.run_id, meta, config: cfg, obstacles, frames, decisions, end_reason: state.endReason } };
 }
 
 const round2 = (v: number | null) => (v === null ? null : Math.round(v * 100) / 100);

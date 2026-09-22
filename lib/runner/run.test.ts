@@ -41,13 +41,14 @@ describe('deadline mode', () => {
 
   it('applies a fast reply to the state it was sent', async () => {
     const cfg = tinyCfg({ baseDeadlineMs: 8000 });
-    const { run, decisions } = await runGame({
+    const { run, decisions, replay } = await runGame({
       cfg, adapter: mockAdapter('mock', { latencyMs: 1 }), mode: 'deadline', hints: false, meta: meta('fast'),
     });
     expect(decisions.every((d) => d.status === 'ok')).toBe(true);
     expect(decisions.every((d) => d.latency_ms !== null)).toBe(true);
     expect(run.timeout_rate).toBe(0);
     expect(run.end_reason).toBe('call_cap');
+    expect(replay.end_reason).toBe('call_cap');
     expect(run.censored).toBe(true);
   });
 });
