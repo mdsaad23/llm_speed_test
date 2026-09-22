@@ -1,3 +1,7 @@
+
+
+https://github.com/user-attachments/assets/5ffc3654-22b4-4561-93d1-ccd0052f5f5d
+
 # SnakeBench
 
 How fast can a model decide? Every model plays Snake under a deadline that shrinks as it scores, and every
