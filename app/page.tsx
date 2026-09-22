@@ -596,6 +596,9 @@ const frameIndexAt = (times: number[], elapsedMs: number) => {
   return i;
 };
 
+/** Only the final frame is over: before it, the same board is a game still in play. */
+const endedAt = (replay: Replay, i: number) => (i === replay.frames.length - 1 ? replay.end_reason ?? null : null);
+
 /** Full RunMeta for one replay, popped up on demand so the grid itself can stay to one line per model. */
 function MetaPopup({ meta }: { meta: Replay['meta'] }) {
   return (
@@ -635,7 +638,7 @@ function SingleReplay({ replay, i, setI, speed, setSpeed }: {
           <MetaPopup meta={replay.meta} />
         </div>
         <Board w={replay.config.w} h={replay.config.h} snake={frame.snake} food={frame.food}
-          obstacles={replay.obstacles} waiting={false} />
+          obstacles={replay.obstacles} waiting={false} ended={endedAt(replay, i)} />
         <input type="range" min={0} max={replay.frames.length - 1} value={i}
           onChange={(e) => setI(Number(e.target.value))} className="mt-2 w-[560px]" />
         <div className="mt-1 flex gap-3">
@@ -695,7 +698,8 @@ function ParallelReplays({ replays }: { replays: Replay[] }) {
       </div>
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         {replays.map((r, idx) => {
-          const frame = r.frames[frameIndexAt(timesByReplay[idx], elapsed)];
+          const at = frameIndexAt(timesByReplay[idx], elapsed);
+          const frame = r.frames[at];
           return (
             <div key={r.run_id} className="border border-line p-1">
               <div className="mb-1 flex items-center justify-between gap-1 text-xs">
@@ -703,7 +707,7 @@ function ParallelReplays({ replays }: { replays: Replay[] }) {
                 <MetaPopup meta={r.meta} />
               </div>
               <Board w={r.config.w} h={r.config.h} snake={frame.snake} food={frame.food}
-                obstacles={r.obstacles} waiting={false} size={240} />
+                obstacles={r.obstacles} waiting={false} size={240} ended={endedAt(r, at)} />
               <div className="mt-1 flex flex-wrap gap-2 text-[11px]">
                 <span>tick {frame.tick}</span>
                 <span>score {frame.score}</span>

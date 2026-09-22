@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import type { Cell } from '@/lib/game/engine';
+import type { Cell, EndReason } from '@/lib/game/engine';
 
 export const PALETTE = {
   ink: '#17120d',
@@ -39,9 +39,11 @@ interface BoardProps {
   obstacles: Cell[];
   waiting: boolean;
   size?: number;
+  /** The game is over on this frame: 'death' marks the head as crashed, any other reason just says ENDED. */
+  ended?: EndReason | null;
 }
 
-export default function Board({ w, h, snake, food, obstacles, waiting, size = 560 }: BoardProps) {
+export default function Board({ w, h, snake, food, obstacles, waiting, size = 560, ended = null }: BoardProps) {
   const ref = useRef<HTMLCanvasElement>(null);
   const spin = useTick(waiting);
 
@@ -98,10 +100,34 @@ export default function Board({ w, h, snake, food, obstacles, waiting, size = 56
     });
 
     const [hx, hy] = snake[0];
-    ctx.fillStyle = PALETTE.cream;
+    const dead = ended === 'death';
+    ctx.fillStyle = dead ? PALETTE.rust : PALETTE.cream;
     ctx.fillRect(px(hx) + 1, px(hy) + 1, cell - 2, cell - 2);
-    ctx.fillStyle = PALETTE.ink;
-    ctx.fillRect(px(hx) + cell * 0.35, px(hy) + cell * 0.35, cell * 0.3, cell * 0.3);
+    if (dead) {
+      // A cross, like the obstacles, so a crashed head never relies on colour alone.
+      ctx.strokeStyle = PALETTE.cream;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(px(hx) + 3, px(hy) + 3);
+      ctx.lineTo(px(hx + 1) - 3, px(hy + 1) - 3);
+      ctx.moveTo(px(hx + 1) - 3, px(hy) + 3);
+      ctx.lineTo(px(hx) + 3, px(hy + 1) - 3);
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = PALETTE.ink;
+      ctx.fillRect(px(hx) + cell * 0.35, px(hy) + cell * 0.35, cell * 0.3, cell * 0.3);
+    }
+
+    if (ended) {
+      ctx.fillStyle = 'rgba(23, 18, 13, 0.45)';
+      ctx.fillRect(0, 0, px(w), px(h));
+      const label = dead ? 'DEAD' : `ENDED · ${ended.replace('_', ' ')}`;
+      ctx.font = `bold ${Math.max(12, Math.round(px(w) / (dead ? 7 : 14)))}px monospace`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = dead ? PALETTE.rust : PALETTE.beige;
+      ctx.fillText(label, px(w) / 2, px(h) / 2);
+    }
 
     if (waiting) {
       ctx.fillStyle = 'rgba(23, 18, 13, 0.55)';
@@ -113,7 +139,7 @@ export default function Board({ w, h, snake, food, obstacles, waiting, size = 56
       ctx.arc(px(hx) + cell / 2, px(hy) + cell / 2, cell * 0.9, angle, angle + Math.PI * 1.2);
       ctx.stroke();
     }
-  }, [w, h, snake, food, obstacles, waiting, spin, size]);
+  }, [w, h, snake, food, obstacles, waiting, spin, size, ended]);
 
   return <canvas ref={ref} className="border border-line" aria-label="snake board" />;
 }
