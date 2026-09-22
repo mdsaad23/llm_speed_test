@@ -1,7 +1,6 @@
 node_modules
 .next
 .env.local
-results
 *.tsbuildinfo
 
 # scripts/laya_server.py's local venv — a few hundred MB of torch, never committed

@@ -1,0 +1,10 @@
+model,level,mode,tries,best_score,mean_score,median_score,all_scores,mean_baseline_score,mean_score_normalized,move_entropy,reference_agreement,reference_kappa,state_blind_runs,latency_p50_ms,latency_p95_ms,latency_p99_ms,timeout_rate,cost_per_move_usd,cost_per_second_usd,cost_usd,avg_time_to_food_s,safe_move_rate,path_efficiency,censored_runs,end_reasons
+mock,1,deadline,3,24,23.667,24,23 24 24,,,,,,0,125.573333,127.39,128.103333,0,0,0,0,1.967667,1,1,3,call_cap
+ollama:llama3.2:3b-instruct-q4_K_M,1,deadline,6,0,0,0,0 0 0 0 0 0,,,,,,0,91.02,103.396667,103.396667,0,0,0,0,0,0.45,0,0,death
+ollama:gemma4:12b-it-q4_K_M,1,deadline,4,12,6.5,4,4 4 6 12,,,,,,0,279.4975,364.6775,389.74,0,0,0,0,3.90975,0.976575,1.009,0,death
+ollama:mistral-small-24b,1,deadline,6,0,0,0,0 0 0 0 0 0,,,,,,0,363.9,514.848333,639.635,0.018733,0,0,0,0,0.986433,0,2,death call_cap
+ollama:minicpm-v:latest,1,deadline,1,0,0,0,0,,,,,,0,86.67,88.8,88.8,0,0,0,0,0,0.9,0,0,death
+ollama:llama3.1:8b-instruct-q8_0,1,deadline,3,0,0,0,0 0 0,,,,,,0,411.843333,426.456667,426.456667,0,0,0,0,0,0.9474,0,0,death
+
+latency_penalty_table
+model,level,turn_p50_ms,deadline_p50_ms,penalty_ms
