@@ -1,3 +1,89 @@
+https://github.com/user-attachments/assets/5ffc3654-22b4-4561-93d1-ccd0052f5f5d
+
+## Results (snapshot: 2026-09-23)
+
+Every model got the same board: 10×10, level 1, seed 101, with a per-move deadline of 8–10 s. Each game was
+capped at 300 moves or 5 minutes. The data covers 94 runs and 6,509 timed decisions in
+[`results/`](./results).
+
+- **Moves per food** is decisions divided by score. Lower is better.
+- **Time per food** is survival time divided by score.
+- **Path** is the moves taken divided by the shortest BFS path. 1.0 is perfect.
+- **Hints** add to the prompt which moves are safe and how much each move changes the distance to the food.
+
+### Who won what
+
+| category | winner | number |
+|---|---|---|
+| overall score | `gemma4:12b-it` (local) | 14 food |
+| moves per food | `gpt-luna` | 7.6 |
+| time per food | `gemma4:12b-it` (local) | 2.7 s |
+| safety | `gpt-luna` | 100% safe moves; the 5-minute clock ended both games |
+| fastest response | `minicpm-v` / `llama3.2:3b` | ~90 ms per move, 0 food |
+| fastest hosted response | `jev` | ~0.4 s per move, best score 4 |
+| reference | greedy BFS script (no LLM) | 25 food, <1 ms per move |
+
+### Every model, 10×10, level 1
+
+Each row shows the model's best run. **Mean** is over all its runs. **Timeouts** and **invalid** are the worst
+rates seen in any run.
+
+| model | runs | best | mean | p50 per move | moves per food | time per food | path | safe moves | moves toward food | timeouts | invalid | how it ended |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `baseline:greedy-bfs` | 1 | **25** | 25 | <1 ms | 9.0 | 1.4 s | 1.18 | 100% | 100% | 0% | 0% | death |
+| `ollama:gemma4:12b-it-q4_K_M` | 9 | **14** | 10.7 | 0.32–0.98 s | 8.4 | 2.7 s | 0.98 | 99% | 96% | 0% | 0% | death |
+| `openrouter:~openai/gpt-luna-latest` | 2 | 12 | 12 | 3.0 s | **7.6** | 25 s | 1.05 | 100% | 99% | 1% | 2% | 5-minute clock (both) |
+| `openrouter:~google/gemini-flash-latest` | 2 | 7 | 7 | 4.8–5.3 s | 8.1 | 44 s | 1.04 | 100% | 100% | 4% | 2% | death / clock |
+| `openrouter:~anthropic/claude-haiku-latest` | 2 | 2 | 2 | 1.3 s | 14 | 21 s | 1.0 | 96% | 89% | 0% | 0% | death |
+| `typesafe:jev-latest` + hints | 3 | 4 | 2.7 | 0.4 s | 75–150 | 31–64 s | 4.3–6.0 | 100% | 53% | 0% | 0% | 300-move cap |
+| `openrouter:~deepseek/deepseek-v4-flash-latest` | 2 | 1 | 0.5 | 2.3 s | 10 | 79 s | 1.0 | 100% | 75% | **74%** | 16% | death |
+| `typesafe:jev-latest` | 6 | 0 | 0 | 0.4 s | — | — | — | 86% | 50% | 0% | 0% | death at move 7 (all) |
+| `laya` | 5 | 0 | 0 | 0.53 s | — | — | — | 80% | 0% | 0% | 0% | death at move 5 (all) |
+| `ollama:llama3.2:3b-instruct` (q4, q8) | 5 | 0 | 0 | 90–104 ms | — | — | — | 0% | 100% | 0% | 0% | death at move 5 |
+| `ollama:qwen3:14b-q4_K_M` | 7 | 0 | 0 | 0.28 s | — | — | — | 86% | 33% | 0% | 0% | death |
+| `ollama:granite4:7b-a1b-h` | 2 | 0 | 0 | 0.20 s | — | — | — | 80% | 0% | 0% | 0% | death |
+| `ollama:mistral:7b-instruct-v0.3` | 1 | 0 | 0 | 0.18 s | — | — | — | 89% | 0% | 0% | 0% | death |
+| `ollama:llama3.1:8b-instruct` (q8, q4 + hints) | 5 | 0 | 0 | 0.12–0.61 s | — | — | — | 89% | 0% | 0% | 0% | death |
+| `ollama:deepseek-r1:8b-llama-distill` | 6 | 0 | 0 | — | — | — | — | — | — | 0% | **100%** | death at move 5 |
+
+On other boards (20×20, or 10×10 at level 2):
+- `gemma4` reached 12 food on 20×20 and 3 at level 2.
+- `phi4:14b` with hints ate 1 food in 300 moves at level 2.
+- `mistral-small-24b` ate 0 on 20×20, both with and without hints; with hints it twice hit the 300-move cap.
+- `minicpm-v`, `llama3.2:3b` and `llama3.1:8b` all scored 0 on 20×20.
+
+### Patterns
+
+- **A fast answer is not a fast result.** Jev answered about 7.5× faster than Luna. It still took longer per
+  food (31–64 s against 25 s), because it needed 10–20× the moves and walked 4–6× the shortest path.
+- **Moves per food is what separates the models.** The top three LLMs needed 7.6–8.4 moves per food, Haiku
+  14, and Jev 75–150. Response time didn't predict score: the two fastest models, at about 90 ms, both scored 0.
+- **More reasoning didn't buy better paths.** Gemini produced about 414 output tokens per move against Luna's
+  140. Its paths were about as short (8.1 against 7.6 moves per food), but each food took 44 s against 25 s,
+  and it scored 7 against 12.
+- **A 12B model on a laptop beat every hosted model** on score and on time per food. No LLM beat the BFS script.
+- **Most models got the same result on every run.** With the same prompt and seed, Gemma, Laya, the Llamas and
+  Jev without hints repeated the same game every time, so their repeat runs mostly measure latency. Jev with
+  hints varied (2–4 food).
+
+### How models failed
+
+1. **No usable output.** `deepseek-r1:8b` returned no move on every call: its reasoning ran past the token cap
+   before a move appeared. `deepseek-v4-flash` answered, but too slowly, and 50–74% of its moves timed out.
+2. **Ignoring the board.** Laya answered RIGHT on every move with about the same probability (~0.62), wherever
+   the food was. It hit the wall in all 5 runs. `llama3.2:3b` and `granite4` also repeated one direction until
+   they hit a wall.
+3. **Not correcting course.** Without hints, Jev went UP once and then LEFT six times, past the food's column
+   and into the wall. Its confidence rose from 0.40 to 0.71 on the way. This happened in all 6 runs.
+4. **Loops.** With hints, models stopped dying but went in circles:
+   - `phi4` repeated D-L-L-L-U-R-R-R for about 290 moves.
+   - `mistral-small-24b` circled U-L-D-R for over 150 moves.
+   - Jev drove long sweeps along the walls.
+
+   Each call has no memory of the moves before it, and choosing only safe moves can cycle forever. Even when
+   the prompt said which move got closer to the food, these models took it only about half the time.
+   **Hints fixed survival, not navigation.**
+
 # SnakeBench
 
 How fast can a model decide? Every model plays Snake under a deadline that shrinks as it scores, and every
@@ -46,8 +132,9 @@ corepack pnpm dev      # http://localhost:3000
 ```
 
 Out of the box the browser runs the mocks, the baselines, every local Ollama tag, `laya` — the same
-typed-decision shape as Jev, but open-weight and CPU-local — and `jev` itself, billed to `TYPESAFE_AI_API_KEY`
-and stopped by the "max $ / run" guard. It reads that list from `/api/models`, which serves the enabled
+typed-decision shape as Jev, but open-weight and CPU-local — and `jev` via the Vercel AI Gateway, billed to
+`AI_GATEWAY_API_KEY` and stopped by the "max $ / run" guard. To play Jev on a TypeSafe key instead, pick the
+"TypeSafe AI (Jev)" provider below. It reads that list from `/api/models`, which serves the enabled
 entries of `models.config.ts`. On Vercel, paid and local-only entries are hidden: a visitor never spends
 the server's key. `mock:slow` is the interesting one: it is slow and jittery
 enough to drive the board through timeouts, invalid replies and errors without spending anything.
@@ -57,7 +144,9 @@ Selecting `laya` in the manual panel spawns `scripts/laya_server.py` itself on f
 leaves it resident — reloading it costs 7-10s, per its own docs, so it is not re-spawned per game.
 
 The provider dropdown in the manual panel reaches everything else: OpenAI, Anthropic, Google, xAI, Groq,
-Together, Mistral, DeepSeek, OpenRouter and the Vercel AI Gateway (which is where Jev lives). Pick one, paste
+Together, Mistral, DeepSeek, OpenRouter, the Vercel AI Gateway, and TypeSafe AI (Jev direct from
+`api.typesafe.ai`, no gateway — its two model ids come from its docs, since it has no catalogue endpoint,
+and `typesafeAdapter` plays it over System One rather than chat). Pick one, paste
 your own key, and `/api/models?provider=` proxies that provider's catalogue — fetched from the provider on
 every load, never a list copied into this repo. OpenRouter and the Gateway list without a key. One adapter
 (`openaiCompatAdapter`) plays them all over `/chat/completions`, and a provider that rejects the strict move
