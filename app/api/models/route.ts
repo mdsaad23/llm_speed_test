@@ -1,4 +1,4 @@
-import { MODELS } from '@/lib/decide/models.config';
+import { MODELS, runsHere } from '@/lib/decide/models.config';
 import { PROVIDERS, envKey, isProviderId, listModels, type ProviderId } from '@/lib/decide/providers';
 
 export const runtime = 'nodejs';
@@ -19,7 +19,7 @@ const PROVIDER_LIST = Object.entries(PROVIDERS).map(([id, p]) => ({
 export async function GET(req: Request) {
   const provider = new URL(req.url).searchParams.get('provider');
   if (!provider) {
-    const local = MODELS.filter((m) => m.enabled && !m.paid).map((m) => ({ id: m.id, note: m.note ?? null }));
+    const local = MODELS.filter((m) => m.enabled && !m.paid && runsHere(m)).map((m) => ({ id: m.id, note: m.note ?? null }));
     return Response.json({ local, providers: PROVIDER_LIST });
   }
   if (!isProviderId(provider)) return Response.json({ error: `unknown provider "${provider}"` }, { status: 400 });

@@ -26,6 +26,15 @@ export const defaultConfig = (over: Partial<Config> = {}): Config => ({
   ...over,
 });
 
+export const OFFICIAL_SEEDS = [101, 102, 103];
+
+/** A run only counts as official when it matches the benchmark's own settings on the official seeds. */
+export const isOfficial = (cfg: Config, mode: string, hints: boolean) => {
+  const base = defaultConfig();
+  const same = (Object.keys(base) as (keyof Config)[]).every((k) => k === 'seed' || cfg[k] === base[k]);
+  return same && OFFICIAL_SEEDS.includes(cfg.seed) && mode !== 'freerun' && !hints;
+};
+
 export type EndReason =
   | 'death' | 'grid_full' | 'time_limit' | 'stall'
   | 'call_cap' | 'budget_cap' | 'errors' | 'aborted';

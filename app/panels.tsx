@@ -247,3 +247,46 @@ export function Leaderboard({ runs }: { runs: RunRecord[] }) {
     </div>
   );
 }
+
+type Best = { mode: string; run: RunRecord };
+
+/** Best official run per model across every visitor; refetched whenever a game here ends. */
+export function BestRuns({ refresh }: { refresh: number }) {
+  const [boards, setBoards] = useState<{ score: Best[]; latency: Best[] } | null>(null);
+  useEffect(() => {
+    fetch('/api/leaderboard').then((r) => r.json()).then(setBoards).catch(() => setBoards(null));
+  }, [refresh]);
+
+  const table = (title: string, rows: Best[], value: (r: RunRecord) => string) => (
+    <div>
+      <h3 className="text-beige">{title}</h3>
+      {rows.length === 0 ? <p className="text-beige">no official runs yet</p> : (
+        <table className="w-full tabular-nums">
+          <tbody>
+            {rows.map(({ mode, run }, i) => (
+              <tr key={`${mode}:${run.model}`}>
+                <td className="w-6">{i + 1}</td>
+                <td>{run.model}</td>
+                <td>{mode}</td>
+                <td className="text-right">{value(run)}</td>
+                <td className="text-right text-beige">{run.timestamp.slice(0, 10)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+
+  return (
+    <div className="space-y-2 text-xs">
+      <h2 className="text-beige uppercase tracking-wide">Leaderboard (best official run per model)</h2>
+      {boards && 'score' in boards ? (
+        <>
+          {table('Best score', boards.score, (r) => String(r.score))}
+          {table('Fastest mean response', boards.latency, (r) => `${fmt(r.latency_mean_ms)} ms`)}
+        </>
+      ) : <p className="text-beige">leaderboard unavailable</p>}
+    </div>
+  );
+}

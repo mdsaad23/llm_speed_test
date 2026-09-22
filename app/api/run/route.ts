@@ -1,11 +1,16 @@
 import { z } from 'zod';
-import { createGame, defaultConfig, type Config, type State } from '@/lib/game/engine';
+import { createGame, defaultConfig, isOfficial, type Config, type State } from '@/lib/game/engine';
 import { byokEntry, createAdapter, findModel, type ModelEntry } from '@/lib/decide/models.config';
 import { PROVIDERS, envKey, isProviderId } from '@/lib/decide/providers';
+import { recordBest } from '@/lib/metrics/leaderboard';
 import { writeResults } from '@/lib/metrics/results';
 import { newBudget, runGame, type RunEvent } from '@/lib/runner/run';
 
 export const runtime = 'nodejs';
+// Vercel's ceiling on every plan. A game is cut to HOSTED_MAX_GAME_SECONDS so its last
+// 30s model call and the leaderboard write still land inside it.
+export const maxDuration = 300;
+const HOSTED_MAX_GAME_SECONDS = 260;
 
 const body = z.object({
   model: z.string(),
@@ -15,7 +20,6 @@ const body = z.object({
   mode: z.enum(['deadline', 'turn', 'freerun']),
   hints: z.boolean(),
   try: z.int().min(1).max(20),
-  manual: z.boolean(),
   displayMinTickMs: z.number().min(0).max(2000),
   maxUsdPerRun: z.number().min(0).max(100),
   cfg: z.object({
@@ -62,7 +66,12 @@ export async function POST(req: Request) {
     if (entry.paid) return Response.json({ error: `"${entry.id}" is paid: run it with pnpm bench` }, { status: 400 });
   }
 
-  const cfg = defaultConfig(opts.cfg);
+  // Decided here, not by the caller: the leaderboard trusts this flag.
+  const manual = !isOfficial(defaultConfig(opts.cfg), opts.mode, opts.hints);
+  const cfg = defaultConfig({
+    ...opts.cfg,
+    maxGameSeconds: process.env.VERCEL ? Math.min(opts.cfg.maxGameSeconds, HOSTED_MAX_GAME_SECONDS) : opts.cfg.maxGameSeconds,
+  });
   const meta = {
     run_id: crypto.randomUUID(),
     model: entry.id,
@@ -73,8 +82,8 @@ export async function POST(req: Request) {
     timestamp: new Date().toISOString(),
     client_region: 'local',
     machine: {},
-    manual: opts.manual,
-    manual_params: opts.manual ? { ...opts.cfg, displayMinTickMs: opts.displayMinTickMs } : undefined,
+    manual,
+    manual_params: manual ? { ...opts.cfg, displayMinTickMs: opts.displayMinTickMs } : undefined,
   };
 
   const adapter = createAdapter(entry, cfg.seed, apiKey);
@@ -99,7 +108,10 @@ export async function POST(req: Request) {
           onEvent: send,
           signal: req.signal,
         });
-        writeResults([run], decisions, [replay], { includeFreerun: false, includeManual: false });
+        // Vercel's disk is read-only: hosted runs keep only what beats the leaderboard.
+        if (!process.env.VERCEL) writeResults([run], decisions, [replay], { includeFreerun: false, includeManual: false });
+        // Mock and baselines are not models: they would sit on top of a board built to compare models.
+        if (!manual && entry.provider !== 'mock' && entry.provider !== 'baseline') await recordBest(run);
       } catch (e) {
         send({ type: 'fatal', message: e instanceof Error ? e.message : String(e) });
       }

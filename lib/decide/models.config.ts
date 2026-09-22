@@ -102,10 +102,14 @@ export const MODELS: ModelEntry[] = [
   ...OLLAMA,
 ];
 
+/** On Vercel there is no GPU, no Ollama and no Python to spawn laya with. */
+export const runsHere = (entry: ModelEntry) => !process.env.VERCEL || !['ollama', 'laya'].includes(entry.provider);
+
 export const findModel = (id: string): ModelEntry => {
   const entry = MODELS.find((m) => m.id === id);
   if (!entry) throw new Error(`unknown model "${id}". Known: ${MODELS.map((m) => m.id).join(', ')}`);
   if (!entry.enabled) throw new Error(`model "${id}" is disabled in models.config.ts`);
+  if (!runsHere(entry)) throw new Error(`model "${id}" only runs on a local checkout`);
   return entry;
 };
 

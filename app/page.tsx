@@ -2,8 +2,8 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Board, { PALETTE, useTick } from './board';
-import { ARROW, Chart, Feed, fmt, Leaderboard, Rail, STATUS } from './panels';
-import { deadlineAt, defaultConfig, type Config, type State } from '@/lib/game/engine';
+import { ARROW, BestRuns, Chart, Feed, fmt, Leaderboard, Rail, STATUS } from './panels';
+import { deadlineAt, defaultConfig, isOfficial, OFFICIAL_SEEDS, type Config, type State } from '@/lib/game/engine';
 import type { DecisionRecord, RunRecord } from '@/lib/metrics/metrics';
 import type { Replay } from '@/lib/runner/run';
 import type { UiEvent } from './api/run/route';
@@ -22,7 +22,6 @@ const splitModel = (id: string, providers: ProviderOption[]) => {
   return providers.some((p) => p.id === provider) ? { provider, route: id.slice(at + 1) } : null;
 };
 
-const SEEDS = [101, 102, 103];
 const MODES = ['deadline', 'turn', 'freerun'] as const;
 
 type Form = Config & {
@@ -42,13 +41,6 @@ const DEFAULTS: Form = {
   tries: 3,
   displayMinTickMs: 150,
   maxUsdPerRun: 1,
-};
-
-/** A run only counts as official when it matches the benchmark's own settings on the official seeds. */
-const isOfficial = (f: Form, seed: number) => {
-  const base = defaultConfig();
-  const same = (Object.keys(base) as (keyof Config)[]).every((k) => (k === 'seed' ? true : f[k] === base[k]));
-  return same && SEEDS.includes(seed) && f.mode !== 'freerun' && !f.hints;
 };
 
 function problems(f: Form, providers: ProviderOption[], keys: Record<string, string>): string[] {
@@ -133,7 +125,8 @@ export default function Page() {
   };
 
   const runOne = async (model: string, t: number, signal: AbortSignal) => {
-    const seed = isOfficial(form, SEEDS[(t - 1) % SEEDS.length]) ? SEEDS[(t - 1) % SEEDS.length] : form.seed;
+    const officialSeed = OFFICIAL_SEEDS[(t - 1) % OFFICIAL_SEEDS.length];
+    const seed = isOfficial({ ...form, seed: officialSeed }, form.mode, form.hints) ? officialSeed : form.seed;
     const { mode, hints, displayMinTickMs, maxUsdPerRun } = form;
     const cfgBody = { ...defaultConfig(form), seed };
     const own = splitModel(model, catalog.providers);
@@ -146,7 +139,6 @@ export default function Page() {
         ...(own ? { provider: own.provider, apiKey: keys[own.provider] ?? '' } : {}),
         mode, hints, displayMinTickMs, maxUsdPerRun,
         try: t,
-        manual: !isOfficial(form, seed),
         cfg: {
           w: cfgBody.w, h: cfgBody.h, level: cfgBody.level, obstacleCount: cfgBody.obstacleCount, seed,
           baseDeadlineMs: cfgBody.baseDeadlineMs, minDeadlineMs: cfgBody.minDeadlineMs,
@@ -234,7 +226,7 @@ export default function Page() {
               )}
             </p>
             <p className="mt-1 text-beige">
-              {isOfficial(form, SEEDS[0]) ? 'Official settings: counts towards summary.csv.' : 'Manual settings: excluded from summary.csv.'}
+              {isOfficial({ ...form, seed: OFFICIAL_SEEDS[0] }, form.mode, form.hints) ? 'Official settings: counts towards the leaderboard and summary.csv.' : 'Manual settings: excluded from the leaderboard and summary.csv.'}
             </p>
             <div className="mt-3 flex gap-2">
               <button className="border border-line px-2 py-0.5" style={{ color: PALETTE.olive }} onClick={start}>Confirm</button>
@@ -330,6 +322,7 @@ export default function Page() {
           <div className="min-w-[420px] flex-1 space-y-4">
             <Feed decisions={decisions} pending={pending} />
             <Leaderboard runs={runs} />
+            <BestRuns refresh={runs.length} />
             <PromptPanel form={form} />
             <Manual form={form} set={set} errors={errors} disabled={running} catalog={catalog} keys={keys}
               setKey={(id, v) => setKeys((k) => ({ ...k, [id]: v }))} />

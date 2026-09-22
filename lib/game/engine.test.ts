@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  bfsDistance, createGame, deadlineAt, defaultConfig, paceFactorAt, speedCpsAt, step,
+  bfsDistance, createGame, deadlineAt, defaultConfig, isOfficial, paceFactorAt, speedCpsAt, step,
   type Config, type Dir,
 } from '@/lib/game/engine';
 import { greedyAdapter } from '@/lib/decide/adapters';
@@ -98,5 +98,15 @@ describe('level 2', () => {
       }
       expect(bfsDistance(s, c, s.snake[0], s.food!)).not.toBeNull();
     }
+  });
+});
+
+describe('isOfficial', () => {
+  it('accepts only default settings on an official seed in a scored mode', () => {
+    expect(isOfficial(defaultConfig({ seed: 102 }), 'deadline', false)).toBe(true);
+    expect(isOfficial(defaultConfig({ seed: 7 }), 'deadline', false)).toBe(false);
+    expect(isOfficial(defaultConfig({ w: 10 }), 'deadline', false)).toBe(false);
+    expect(isOfficial(defaultConfig(), 'freerun', false)).toBe(false);
+    expect(isOfficial(defaultConfig(), 'turn', true)).toBe(false);
   });
 });

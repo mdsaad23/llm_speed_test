@@ -334,8 +334,12 @@ export const PROVIDERS = {
 export type ProviderId = keyof typeof PROVIDERS;
 export const isProviderId = (id: string): id is ProviderId => id in PROVIDERS;
 
-/** A key saved locally in `.env.local`, e.g. OPENAI_API_KEY, so the UI field can stay blank. */
-export const envKey = (id: ProviderId): string => process.env[`${id.toUpperCase()}_API_KEY`] ?? '';
+/**
+ * A key saved locally in `.env.local`, e.g. OPENAI_API_KEY, so the UI field can stay blank.
+ * Never on Vercel: a key set there by mistake would let every visitor spend on it.
+ */
+export const envKey = (id: ProviderId): string =>
+  process.env.VERCEL ? '' : (process.env[`${id.toUpperCase()}_API_KEY`] ?? '');
 
 /** A borrowed key never reaches a log line, an error banner or a results file. */
 const redact = (text: string, key: string) => (key ? text.replaceAll(key, '***') : text);
