@@ -83,13 +83,7 @@ export const jevAdapter = (entry: ModelEntry): Adapter => ({
     const result = await experimental_evaluate({
       model: entry.route,
       state: JSON.parse(stateJson(state, cfg, mode, hints)),
-      questions: {
-        move: {
-          type: 'choice',
-          instructions: systemPrompt(mode),
-          criteria: Object.fromEntries(legalMoves(state.dir).map((d) => [d, MOVE_MEANING[d]])),
-        },
-      },
+      questions: { move: moveQuestion(systemPrompt(mode), state.dir) },
       maxRetries: 0,
       abortSignal: signal,
     });
@@ -162,7 +156,7 @@ async function ensureLayaRunning(): Promise<void> {
   await layaReady;
 }
 
-interface LayaResponse {
+interface SystemOneResponse {
   answers: { move: { choice: string; probabilities?: Record<string, number> } };
   usage: { input_tokens?: number; output_tokens?: number };
 }
@@ -197,35 +191,60 @@ export const layaAdapter = (entry: ModelEntry): Adapter => ({
     await ensureLayaRunning();
   },
   async decide({ state, cfg, mode, hints, signal }: DecideContext): Promise<Decision> {
-    const tRequestSent = now();
-    const response = await fetch(`${LAYA_HOST()}/predict`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      signal,
-      body: JSON.stringify({
-        state: layaState(stateJson(state, cfg, mode, hints)),
-        questions: {
-          move: {
-            type: 'choice',
-            instructions: LAYA_INSTRUCTIONS,
-            criteria: Object.fromEntries(legalMoves(state.dir).map((d) => [d, MOVE_MEANING[d]])),
-          },
-        },
-      }),
-    });
-    const tResponseComplete = now();
-    if (!response.ok) throw new Error(`laya ${response.status}: ${await response.text()}`);
-    const body = (await response.json()) as LayaResponse;
-    const answer = body.answers.move;
-    return {
-      move: parseMove({ move: answer.choice }),
-      timing: { tRequestSent, tFirstToken: null, tResponseComplete },
-      usage: toUsage({ inputTokens: body.usage.input_tokens, outputTokens: body.usage.output_tokens }),
-      raw: JSON.stringify(answer),
-      confidence: answer.probabilities?.[answer.choice] ?? null,
-    };
+    return askSystemOne(`${LAYA_HOST()}/predict`, {}, '', {
+      state: layaState(stateJson(state, cfg, mode, hints)),
+      questions: { move: moveQuestion(LAYA_INSTRUCTIONS, state.dir) },
+    }, signal);
   },
 });
+
+/** Jev straight from TypeSafe's own API, on the caller's key — no Vercel Gateway in between. */
+export const typesafeAdapter = (entry: ModelEntry, key: string): Adapter => ({
+  id: entry.id,
+  paid: false, // the caller's own key is billed, as with every other bring-your-own-key provider
+  streams: false,
+  async decide({ state, cfg, mode, hints, signal }: DecideContext): Promise<Decision> {
+    return askSystemOne(`${PROVIDERS.typesafe.base}/systemone`, { authorization: `Bearer ${key}` }, key, {
+      model: entry.route,
+      state: JSON.parse(stateJson(state, cfg, mode, hints)),
+      questions: { move: moveQuestion(systemPrompt(mode), state.dir) },
+    }, signal);
+  },
+});
+
+const moveQuestion = (instructions: string, dir: Dir) => ({
+  type: 'choice' as const,
+  instructions,
+  criteria: Object.fromEntries(legalMoves(dir).map((d) => [d, MOVE_MEANING[d]])),
+});
+
+/** TypeSafe's System One protocol, which Laya's server speaks too: {state, questions} in, {answers, usage} out. */
+async function askSystemOne(
+  url: string,
+  auth: Record<string, string>,
+  key: string,
+  request: object,
+  signal: AbortSignal,
+): Promise<Decision> {
+  const tRequestSent = now();
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...auth },
+    signal,
+    body: JSON.stringify(request),
+  });
+  const tResponseComplete = now();
+  if (!response.ok) throw new Error(`${new URL(url).host} ${response.status}: ${redact(await response.text(), key).slice(0, 300)}`);
+  const body = (await response.json()) as SystemOneResponse;
+  const answer = body.answers.move;
+  return {
+    move: parseMove({ move: answer.choice }),
+    timing: { tRequestSent, tFirstToken: null, tResponseComplete },
+    usage: toUsage({ inputTokens: body.usage.input_tokens, outputTokens: body.usage.output_tokens }),
+    raw: JSON.stringify(answer),
+    confidence: answer.probabilities?.[answer.choice] ?? null,
+  };
+}
 
 const OLLAMA_HOST = () => process.env.OLLAMA_HOST ?? 'http://localhost:11434';
 const NS_PER_MS = 1e6;
@@ -322,11 +341,13 @@ export interface ProviderSpec {
   strip?: string;
   /** Anthropic lists with its own header pair; everyone else takes a bearer token. */
   listHeaders?: (key: string) => Record<string, string>;
+  /** A provider with no `/models` endpoint: its whole catalog, from its docs. */
+  models?: string[];
 }
 
 /**
- * Bring-your-own-key providers. No model list is written down here: every catalog is fetched
- * from the provider itself on request. Endpoints and auth styles probed against the live APIs.
+ * Bring-your-own-key providers. Catalogs are fetched from the provider itself on request, except
+ * where it has no endpoint for one. Endpoints and auth styles probed against the live APIs.
  */
 export const PROVIDERS = {
   openai: { label: 'OpenAI', base: 'https://api.openai.com/v1' },
@@ -346,7 +367,14 @@ export const PROVIDERS = {
   mistral: { label: 'Mistral', base: 'https://api.mistral.ai/v1' },
   deepseek: { label: 'DeepSeek', base: 'https://api.deepseek.com/v1' },
   openrouter: { label: 'OpenRouter', base: 'https://openrouter.ai/api/v1', keylessList: true },
-  vercel: { label: 'Vercel AI Gateway (Jev lives here)', base: 'https://ai-gateway.vercel.sh/v1', keylessList: true },
+  vercel: { label: 'Vercel AI Gateway', base: 'https://ai-gateway.vercel.sh/v1', keylessList: true },
+  // Not OpenAI-compatible: played by typesafeAdapter over System One. Aliases per docs.typesafe.ai/models.
+  typesafe: {
+    label: 'TypeSafe AI (Jev)',
+    base: 'https://api.typesafe.ai/v1',
+    keylessList: true,
+    models: ['jev-latest', 'jev-1.13.0'],
+  },
 } satisfies Record<string, ProviderSpec>;
 
 export type ProviderId = keyof typeof PROVIDERS;
@@ -367,6 +395,7 @@ export interface ListedModel { id: string; name: string }
 /** The provider's own catalog, live. Shapes differ: a bare array or {data}, id plus name or display_name. */
 export async function listModels(provider: ProviderId, key: string): Promise<ListedModel[]> {
   const spec: ProviderSpec = PROVIDERS[provider];
+  if (spec.models) return spec.models.map((id) => ({ id, name: '' }));
   const auth = spec.listHeaders?.(key) ?? (key ? { authorization: `Bearer ${key}` } : {});
   const res = await fetch(`${spec.base}/models`, {
     headers: { accept: 'application/json', ...auth },

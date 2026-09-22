@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createGame, defaultConfig } from '@/lib/game/engine';
-import { LAYA_INSTRUCTIONS, layaAdapter, ollamaAdapter, openaiCompatAdapter } from '@/lib/decide/providers';
+import { LAYA_INSTRUCTIONS, layaAdapter, listModels, ollamaAdapter, openaiCompatAdapter, typesafeAdapter } from '@/lib/decide/providers';
 import type { ModelEntry } from '@/lib/decide/models.config';
 
 const entry = {
@@ -88,6 +88,37 @@ describe('laya adapter', () => {
     // Not stubFetch: that helper assumes a JSON body to record, but /health is a bare GET.
     vi.stubGlobal('fetch', async () => new Response(null, { status: 200 }));
     await expect(layaAdapter(layaEntry).warmup?.(defaultConfig({ w: 10, h: 10 }))).resolves.toBeUndefined();
+  });
+});
+
+describe('typesafe adapter', () => {
+  it('calls System One directly with the caller key and the chosen model, and keeps the key out of errors', async () => {
+    let url = '';
+    let auth = '';
+    const sent = stubFetch({ answers: { move: { choice: 'DOWN', probabilities: { DOWN: 0.8 } } }, usage: { input_tokens: 300, output_tokens: 0 } });
+    const recording = fetch;
+    vi.stubGlobal('fetch', (u: string, init: RequestInit) => {
+      url = u;
+      auth = (init.headers as Record<string, string>).authorization;
+      return recording(u, init);
+    });
+    const typesafe = { ...byok, id: 'typesafe:jev-latest', route: 'jev-latest', provider: 'typesafe' } as ModelEntry;
+    const cfg = defaultConfig({ w: 10, h: 10 });
+    const ctx = { state: createGame(cfg), cfg, mode: 'deadline' as const, hints: false, signal: new AbortController().signal };
+    const decision = await typesafeAdapter(typesafe, 'ts-secret').decide(ctx);
+
+    expect(url).toBe('https://api.typesafe.ai/v1/systemone');
+    expect(auth).toBe('Bearer ts-secret');
+    expect(sent.request.model).toBe('jev-latest');
+    expect(decision).toMatchObject({ move: 'DOWN', confidence: 0.8 });
+
+    vi.stubGlobal('fetch', async () => new Response('bad key ts-secret', { status: 401 }));
+    await expect(typesafeAdapter(typesafe, 'ts-secret').decide(ctx)).rejects.toThrow('401: bad key ***');
+  });
+
+  it('lists its models without a network call', async () => {
+    vi.stubGlobal('fetch', () => { throw new Error('no fetch expected'); });
+    expect((await listModels('typesafe', '')).map((m) => m.id)).toEqual(['jev-latest', 'jev-1.13.0']);
   });
 });
 

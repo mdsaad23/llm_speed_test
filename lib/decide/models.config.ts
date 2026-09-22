@@ -1,5 +1,5 @@
 import { greedyAdapter, mockAdapter, randomAdapter, type Adapter, type MockOptions } from '@/lib/decide/adapters';
-import { gatewayAdapter, jevAdapter, layaAdapter, ollamaAdapter, openaiCompatAdapter, type ProviderId } from '@/lib/decide/providers';
+import { gatewayAdapter, jevAdapter, layaAdapter, ollamaAdapter, openaiCompatAdapter, typesafeAdapter, type ProviderId } from '@/lib/decide/providers';
 
 export interface ModelEntry {
   /** What you type on the CLI. */
@@ -93,7 +93,7 @@ export const MODELS: ModelEntry[] = [
   {
     id: 'jev', route: 'typesafe-ai/jev', provider: 'jev',
     reasoning: 'none', timeoutMs: 30_000, maxTokens: 16, enabled: true, paid: true,
-    note: 'billed to TYPESAFE_AI_API_KEY at $0.042 / 1M input tokens; the "max $ / run" guard stops the game before it overspends.',
+    note: 'via the Vercel AI Gateway, billed to AI_GATEWAY_API_KEY at $0.042 / 1M input tokens and stopped by the "max $ / run" guard. For a TypeSafe key, pick the "TypeSafe AI (Jev)" provider instead.',
   },
   {
     id: 'laya', route: 'convaiinnovations/laya', provider: 'laya',
@@ -149,6 +149,8 @@ export function createAdapter(entry: ModelEntry, seed: number, apiKey = ''): Ada
       return layaAdapter(entry);
     case 'ollama':
       return ollamaAdapter(entry);
+    case 'typesafe':
+      return typesafeAdapter(entry, apiKey);
     default:
       return openaiCompatAdapter(entry, apiKey);
   }
