@@ -45,10 +45,11 @@ Results land in `results/`:
 corepack pnpm dev      # http://localhost:3000
 ```
 
-Out of the box the browser runs free models: the mocks, the baselines, every local Ollama tag, and `laya` —
-the same typed-decision shape as Jev, but open-weight and CPU-local. It reads that list from `/api/models`,
-which serves the enabled, unpaid entries of `models.config.ts`. Models billed to the server's own key stay
-CLI-only, where the estimate and confirmation live. `mock:slow` is the interesting one: it is slow and jittery
+Out of the box the browser runs the mocks, the baselines, every local Ollama tag, `laya` — the same
+typed-decision shape as Jev, but open-weight and CPU-local — and `jev` itself, billed to `TYPESAFE_AI_API_KEY`
+and stopped by the "max $ / run" guard. It reads that list from `/api/models`, which serves the enabled
+entries of `models.config.ts`. On Vercel, paid and local-only entries are hidden: a visitor never spends
+the server's key. `mock:slow` is the interesting one: it is slow and jittery
 enough to drive the board through timeouts, invalid replies and errors without spending anything.
 
 Selecting `laya` in the manual panel spawns `scripts/laya_server.py` itself on first use (needs the one-time

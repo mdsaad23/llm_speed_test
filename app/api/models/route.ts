@@ -11,15 +11,15 @@ const PROVIDER_LIST = Object.entries(PROVIDERS).map(([id, p]) => ({
 }));
 
 /**
- * No argument: what the server can run on its own — enabled and free. Paid server-side models
- * stay on the CLI, where the worst-case estimate and the typed confirmation live.
+ * No argument: every enabled model this deployment can run on its own. Paid ones (local only)
+ * are capped by the run's "max $ / run" budget guard, checked worst-case before every call.
  * `?provider=`: that provider's live catalog, proxied because the browser cannot reach it
  * (CORS) and because the key belongs in a header, not in a third-party URL.
  */
 export async function GET(req: Request) {
   const provider = new URL(req.url).searchParams.get('provider');
   if (!provider) {
-    const local = MODELS.filter((m) => m.enabled && !m.paid && runsHere(m)).map((m) => ({ id: m.id, note: m.note ?? null }));
+    const local = MODELS.filter((m) => m.enabled && runsHere(m)).map((m) => ({ id: m.id, note: m.note ?? null }));
     return Response.json({ local, providers: PROVIDER_LIST });
   }
   if (!isProviderId(provider)) return Response.json({ error: `unknown provider "${provider}"` }, { status: 400 });

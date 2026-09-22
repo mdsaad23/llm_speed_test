@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createGame, defaultConfig } from '@/lib/game/engine';
-import { layaAdapter, ollamaAdapter, openaiCompatAdapter } from '@/lib/decide/providers';
+import { LAYA_INSTRUCTIONS, layaAdapter, ollamaAdapter, openaiCompatAdapter } from '@/lib/decide/providers';
 import type { ModelEntry } from '@/lib/decide/models.config';
 
 const entry = {
@@ -76,6 +76,9 @@ describe('laya adapter', () => {
 
     // The snake starts facing RIGHT, so LEFT (the reversal) is never even offered.
     expect(Object.keys(sent.request.questions.move.criteria)).toEqual(['UP', 'DOWN', 'RIGHT']);
+    // Laya truncates instructions past ~150 tokens and the state from the right.
+    expect(sent.request.questions.move.instructions).toBe(LAYA_INSTRUCTIONS);
+    expect(Object.keys(sent.request.state).slice(-2)).toEqual(['snake', 'obstacles']);
     expect(decision.move).toBe('UP');
     expect(decision.confidence).toBe(0.7);
     expect(decision.usage).toMatchObject({ input: 90, output: 0, estimated: false });

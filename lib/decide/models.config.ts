@@ -92,18 +92,23 @@ export const MODELS: ModelEntry[] = [
   },
   {
     id: 'jev', route: 'typesafe-ai/jev', provider: 'jev',
-    reasoning: 'none', timeoutMs: 30_000, maxTokens: 16, enabled: false, paid: true,
+    reasoning: 'none', timeoutMs: 30_000, maxTokens: 16, enabled: true, paid: true,
+    note: 'billed to TYPESAFE_AI_API_KEY at $0.042 / 1M input tokens; the "max $ / run" guard stops the game before it overspends.',
   },
   {
     id: 'laya', route: 'convaiinnovations/laya', provider: 'laya',
     reasoning: 'none', timeoutMs: 30_000, maxTokens: 16, enabled: true, paid: false,
-    note: 'CPU-local, same typed-decision shape as jev. Its own server auto-starts on first warmup (needs the one-time `py -3.12 -m pip install laya` from scripts/laya_server.py\'s docstring) and stays resident.',
+    note: 'CPU-local, same typed-decision shape as jev, but a small classifier: it mostly answers the current heading whatever the board says (capability floor, measured). Gets its own short prompt — the shared one overflowed its 192-token instruction budget. Its own server auto-starts on first warmup (needs the one-time `py -3.12 -m pip install laya` from scripts/laya_server.py\'s docstring) and stays resident.',
   },
   ...OLLAMA,
 ];
 
-/** On Vercel there is no GPU, no Ollama and no Python to spawn laya with. */
-export const runsHere = (entry: ModelEntry) => !process.env.VERCEL || !['ollama', 'laya'].includes(entry.provider);
+/**
+ * On Vercel there is no GPU, no Ollama and no Python to spawn laya with — and a paid model would
+ * bill the server's own key to any visitor, so those stay on a local checkout too.
+ */
+export const runsHere = (entry: ModelEntry) =>
+  !process.env.VERCEL || (!entry.paid && !['ollama', 'laya'].includes(entry.provider));
 
 export const findModel = (id: string): ModelEntry => {
   const entry = MODELS.find((m) => m.id === id);

@@ -62,8 +62,6 @@ export async function POST(req: Request) {
     } catch (e) {
       return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 400 });
     }
-    // Models billed to the server's own key stay on the CLI, where the typed confirmation lives.
-    if (entry.paid) return Response.json({ error: `"${entry.id}" is paid: run it with pnpm bench` }, { status: 400 });
   }
 
   // Decided here, not by the caller: the leaderboard trusts this flag.

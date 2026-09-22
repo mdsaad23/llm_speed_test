@@ -168,8 +168,26 @@ interface LayaResponse {
 }
 
 /**
+ * Laya gives instructions + options only 192 tokens and the whole sequence 512, cutting the rest
+ * silently. systemPrompt() is ~250 tokens, so the goal ("reach the food") never arrived; this fits.
+ * The clock text is dropped: a ~300ms classifier has nothing to hurry.
+ */
+export const LAYA_INSTRUCTIONS =
+  'Snake on a grid: x grows right, y grows down, (0,0) is top-left. Moves are absolute: UP is y-1, DOWN y+1, ' +
+  'LEFT x-1, RIGHT x+1. The head dies entering a wall, an obstacle or the snake body. ' +
+  'Pick the move that survives and reaches the food in the fewest moves.';
+
+/** Laya cuts the state from the right, so the long arrays go last: food and hints must survive. */
+const layaState = (json: string) => {
+  const { snake, obstacles, ...rest } = JSON.parse(json);
+  return { ...rest, snake, obstacles };
+};
+
+/**
  * Laya is the same typed-decision shape as Jev — one choice question, criteria, probabilities
  * back — but open-weight and CPU-local: served by `scripts/laya_server.py`, not the gateway.
+ * It is a ModernBERT classifier, not a reasoner: measured on 2026-09-22 it answers RIGHT (the
+ * heading) at ~0.7 wherever the food is, even with this prompt. A capability floor, not a prompt bug.
  */
 export const layaAdapter = (entry: ModelEntry): Adapter => ({
   id: entry.id,
@@ -185,11 +203,11 @@ export const layaAdapter = (entry: ModelEntry): Adapter => ({
       headers: { 'content-type': 'application/json' },
       signal,
       body: JSON.stringify({
-        state: JSON.parse(stateJson(state, cfg, mode, hints)),
+        state: layaState(stateJson(state, cfg, mode, hints)),
         questions: {
           move: {
             type: 'choice',
-            instructions: systemPrompt(mode),
+            instructions: LAYA_INSTRUCTIONS,
             criteria: Object.fromEntries(legalMoves(state.dir).map((d) => [d, MOVE_MEANING[d]])),
           },
         },
