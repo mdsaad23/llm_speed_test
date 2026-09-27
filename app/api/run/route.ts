@@ -50,7 +50,7 @@ export async function POST(req: Request) {
   const opts = parsed.data;
 
   let entry: ModelEntry;
-  let apiKey = opts.apiKey ?? '';
+  let apiKey = opts.apiKey?.trim() ?? '';
   if (opts.provider) {
     if (!isProviderId(opts.provider)) return Response.json({ error: `unknown provider "${opts.provider}"` }, { status: 400 });
     apiKey ||= envKey(opts.provider);
@@ -109,7 +109,10 @@ export async function POST(req: Request) {
         // Vercel's disk is read-only: hosted runs keep only what beats the leaderboard.
         if (!process.env.VERCEL) writeResults([run], decisions, [replay], { includeFreerun: false, includeManual: false });
         // Mock and baselines are not models: they would sit on top of a board built to compare models.
-        if (!manual && entry.provider !== 'mock' && entry.provider !== 'baseline') await recordBest(run);
+        // A store outage costs one leaderboard entry, never the visitor's finished game.
+        if (!manual && entry.provider !== 'mock' && entry.provider !== 'baseline') {
+          await recordBest(run).catch((e) => console.error('[leaderboard]', e));
+        }
       } catch (e) {
         send({ type: 'fatal', message: e instanceof Error ? e.message : String(e) });
       }

@@ -81,7 +81,11 @@ export default function Page() {
   const abort = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    fetch('/api/models').then((r) => r.json()).then(setCatalog).catch(() => setCatalog(EMPTY_CATALOG));
+    fetch('/api/models').then((r) => r.json() as Promise<Catalog>).then((c) => {
+      setCatalog(c);
+      // Hosted, the default mock is not offered: Start must wait for a model the visitor picked.
+      setForm((f) => ({ ...f, models: f.models.filter((m) => c.local.some((l) => l.id === m)) }));
+    }).catch(() => setCatalog(EMPTY_CATALOG));
   }, []);
 
   const set = <K extends keyof Form>(k: K, v: Form[K]) => setForm((f) => ({ ...f, [k]: v }));
@@ -401,6 +405,13 @@ function Manual({ form, set, errors, disabled, catalog, keys, setKey }: {
   const provider = catalog.providers.find((p) => p.id === browsing);
   const key = keys[browsing] ?? '';
 
+  // Hosted there is nothing on "this machine", so open on a catalogue that lists without a key.
+  useEffect(() => {
+    if (catalog.local.length === 0 && catalog.providers.length > 0) {
+      setBrowsing((b) => b || (catalog.providers.find((p) => p.keylessList) ?? catalog.providers[0]).id);
+    }
+  }, [catalog]);
+
   const load = async (id: string, withKey: string) => {
     setNote('loading…');
     setRemote([]);
@@ -438,7 +449,7 @@ function Manual({ form, set, errors, disabled, catalog, keys, setKey }: {
         <div className="mb-1 flex flex-wrap items-center gap-2">
           <span className="flex items-center gap-1 text-beige">provider <Help k="provider" /></span>
           <select value={browsing} onChange={(e) => setBrowsing(e.target.value)} className="w-56">
-            <option value="">this machine — free models</option>
+            {catalog.local.length > 0 && <option value="">this machine — free models</option>}
             {catalog.providers.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
           </select>
           {provider && (

@@ -33,7 +33,7 @@ describe('live run endpoint', () => {
     expect(readdirSync(join(process.env.SNAKEBENCH_RESULTS_DIR!, 'replays'))).toHaveLength(1);
   }, 30_000);
 
-  it('refuses anything that is not a free, enabled model', async () => {
+  it('refuses a disabled model', async () => {
     const res = await post({ ...game, model: 'gemini-3.8-flash' });
     expect(res.status).toBe(400);
     expect((await res.json()).error).toMatch(/disabled/);
@@ -42,5 +42,21 @@ describe('live run endpoint', () => {
   it('rejects an out-of-range configuration', async () => {
     const res = await post({ ...game, cfg: { ...game.cfg, w: 2 } });
     expect(res.status).toBe(400);
+  });
+
+  it('on Vercel, plays only on a key the visitor pasted', async () => {
+    process.env.VERCEL = '1';
+    process.env.OPENAI_API_KEY = 'server-key';
+    try {
+      for (const model of ['mock', 'baseline:greedy-bfs', 'ollama:phi4:14b-q4_K_M', 'laya', 'jev']) {
+        expect((await post({ ...game, model })).status).toBe(400);
+      }
+      const unkeyed = await post({ ...game, model: 'gpt-5', provider: 'openai', apiKey: '  ' });
+      expect(unkeyed.status).toBe(400);
+      expect((await unkeyed.json()).error).toMatch(/needs an API key/);
+    } finally {
+      delete process.env.VERCEL;
+      delete process.env.OPENAI_API_KEY;
+    }
   });
 });

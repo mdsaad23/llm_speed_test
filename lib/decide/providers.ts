@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { MOVE_MEANING, legalMoves, moveSchema, moveSchemaFor, stateJson, systemPrompt } from '@/lib/decide/prompt';
 import { now, type Adapter, type DecideContext, type Decision, type Usage } from '@/lib/decide/adapters';
 import type { ModelEntry } from '@/lib/decide/models.config';
-import type { Dir } from '@/lib/game/engine';
+import { createGame, type Config, type Dir } from '@/lib/game/engine';
 
 type Reasoning = NonNullable<Parameters<typeof generateObject>[0]['reasoning']>;
 
@@ -135,7 +135,8 @@ async function ensureLayaRunning(): Promise<void> {
   if (!layaReady) {
     const port = new URL(LAYA_HOST()).port || '8420';
     const [cmd, baseArgs] = layaCommand();
-    layaProcess = spawn(cmd, [...baseArgs, 'scripts/laya_server.py', '--port', port], { stdio: 'inherit' });
+    // Local-only: left untraced so the hosted /api/run bundle does not swallow the whole project.
+    layaProcess = spawn(/*turbopackIgnore: true*/ cmd, [...baseArgs, 'scripts/laya_server.py', '--port', port], { stdio: 'inherit' });
     layaProcess.on('exit', (code) => {
       if (code) console.warn(`[laya] server exited unexpectedly (code ${code})`);
       layaProcess = null;
@@ -198,8 +199,20 @@ export const layaAdapter = (entry: ModelEntry): Adapter => ({
   },
 });
 
+/**
+ * One untimed move before the clock starts. Under a 500ms deadline a 401 lands late and is thrown
+ * away, so a bad key or model id would read as a slow model; here it fails loudly instead.
+ */
+const withProbe = (entry: ModelEntry, adapter: Adapter): Adapter => ({
+  ...adapter,
+  async warmup(cfg: Config) {
+    const signal = AbortSignal.timeout(entry.timeoutMs);
+    await adapter.decide({ state: createGame(cfg), cfg, mode: 'turn', hints: false, signal });
+  },
+});
+
 /** Jev straight from TypeSafe's own API, on the caller's key — no Vercel Gateway in between. */
-export const typesafeAdapter = (entry: ModelEntry, key: string): Adapter => ({
+export const typesafeAdapter = (entry: ModelEntry, key: string): Adapter => withProbe(entry, {
   id: entry.id,
   paid: false, // the caller's own key is billed, as with every other bring-your-own-key provider
   streams: false,
@@ -463,7 +476,7 @@ const looseJson = (text: string): unknown =>
   safeJson(text) ?? safeJson(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1));
 
 /** Any OpenAI-compatible provider, played on a key the caller supplied. */
-export const openaiCompatAdapter = (entry: ModelEntry, key: string): Adapter => ({
+export const openaiCompatAdapter = (entry: ModelEntry, key: string): Adapter => withProbe(entry, {
   id: entry.id,
   paid: false, // the caller's own key is billed, so the server budget guard has nothing to charge
   streams: false,
